@@ -274,6 +274,13 @@ class TrainLoop():
         t_world.shutdown()
         return v_report, t_report
 
+    def run_test(self):
+        opt = self.opt
+        world = self.world
+        if opt.get('model_file'):
+            self.agent = create_agent(opt)
+        _rep, wrld = run_eval(self.agent, opt, 'test', write_log=True)
+        wrld.shutdown()  # may need to shut down threads, remote connections
 
 if __name__ == '__main__':
     TrainLoop(setup_args().parse_args()).train()
