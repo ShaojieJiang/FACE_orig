@@ -14,8 +14,9 @@ import torch
 from torch.autograd import Variable
 from torch import optim
 import torch.nn as nn
+import torch.nn.functional as F
 
-from collections import deque
+from collections import deque, Counter
 
 import os
 import math
@@ -154,6 +155,7 @@ class Seq2seqAgent(Agent):
         self.metrics = {'loss': 0.0, 'num_tokens': 0}
         self.history = {}
         self.report_freq = opt['report_freq']
+        self.word_freq = torch.zeros(self.opt['dict_maxtokens'])
         states = {}
 
         # check for cuda
@@ -290,6 +292,7 @@ class Seq2seqAgent(Agent):
                 # push to cuda
                 self.xs = self.xs.cuda()
                 self.ys = self.ys.cuda()
+                self.word_freq = self.word_freq.cuda()
                 if self.rank:
                     self.cands = self.cands.cuda()
                 self.criterion.cuda()
@@ -439,6 +442,19 @@ class Seq2seqAgent(Agent):
         self.answers[batch_idx] = None
         return obs
 
+    def loss_weight(self, predictions):
+        curr = Counter()
+        for pred in predictions.cpu().data.numpy():
+            curr.update(pred)
+
+        self.word_freq *= 0.9 # here the decaying factor should be a hyper-parameter
+        for k, v in curr.most_common():
+            self.word_freq[k] += v
+        shift = torch.max(self.word_freq) / 2 # this will make the weight of most frequent token go zero
+        weight = F.sigmoid(-self.word_freq + shift)
+        weight = weight / torch.sum(weight) * weight.size(0) # normalization
+        return weight
+        
     def predict(self, xs, ys=None, cands=None, valid_cands=None, is_training=False):
         """Produce a prediction from our model.
 
@@ -446,11 +462,14 @@ class Seq2seqAgent(Agent):
         candidates as well if they are available and param is set.
         """
         text_cand_inds, loss_dict = None, None
+        # if ys is not None:
+        #     ys = xs
         if is_training:
             self.model.train()
             self.zero_grad()
             out = self.model(xs, ys)
             predictions, scores = out[0], out[1]
+            self.criterion.weight = self.loss_weight(predictions)
             loss = self.criterion(scores.view(-1, scores.size(-1)), ys.view(-1))
             # save loss to metrics
             target_tokens = ys.ne(self.NULL_IDX).long().sum().data[0]
