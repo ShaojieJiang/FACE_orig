@@ -252,7 +252,7 @@ def maintain_dialog_history(history, observation, reply='',
             r = history['labels'][0]
             history['dialog'].extend(parse(r, splitSentences))
     if 'text' in observation:
-        history['dialog'].extend(parse(observation['text'], splitSentences))
+        history['dialog'].extend(parse(observation['text'], splitSentences)[:historyLength]) # when max_len exceeds, use the beginning part instead of last max_len tokens
 
     history['episode_done'] = observation['episode_done']
     if 'labels' in observation:
