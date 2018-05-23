@@ -15,7 +15,8 @@ from torch.autograd import Variable
 from torch import optim
 import torch.nn as nn
 
-from collections import deque
+from collections import deque, Counter
+from nltk.util import ngrams
 
 import os
 import math
@@ -385,13 +386,17 @@ class Seq2seqAgent(Agent):
 
     def reset_metrics(self):
         self.metrics['loss'] = 0.0
-        self.metrics['num_tokens'] = 0
+        self.metrics['num_tokens'] = 0.0
+        self.metrics['1_gram'] = Counter()
+        self.metrics['2_gram'] = Counter()
 
     def report(self):
         m = {}
         if self.metrics['num_tokens'] > 0:
             m['loss'] = self.metrics['loss'] / self.metrics['num_tokens']
             m['ppl'] = math.exp(m['loss'])
+            m['d_1'] = len(self.metrics['1_gram']) / self.metrics['num_tokens']
+            m['d_2'] = len(self.metrics['2_gram']) / self.metrics['num_tokens']
         for k, v in m.items():
             # clean up: rounds to sigfigs and converts tensors to floats
             m[k] = round_sigfigs(v, 4)
@@ -539,6 +544,12 @@ class Seq2seqAgent(Agent):
 
         return xs, ys, labels, valid_inds, cands, valid_cands, is_training
 
+    def distinct_ngrams(self, predictions):
+        sentences = predictions.cpu().data.numpy().tolist()
+        for sent in sentences:
+            self.metrics['1_gram'].update(sent)
+            self.metrics['2_gram'].update(ngrams(sent, 2))
+        
     def batch_act(self, observations):
         batchsize = len(observations)
         # initialize a table of replies with this agent's id
@@ -556,6 +567,7 @@ class Seq2seqAgent(Agent):
 
         # produce predictions, train on targets if availables
         predictions, text_cand_inds = self.predict(xs, ys, cands, valid_cands, is_training)
+        self.distinct_ngrams(predictions)
 
         if is_training:
             report_freq = 0
