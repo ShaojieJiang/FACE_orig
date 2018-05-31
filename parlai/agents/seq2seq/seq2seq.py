@@ -140,6 +140,8 @@ class Seq2seqAgent(Agent):
                                 'so they are not updated during training.')
         agent.add_argument('-rf', '--report-freq', type=float, default=0.001,
                            help='Report frequency of prediction during eval.')
+        agent.add_argument('-beam', '--beam-size', type=int, default=5,
+                           help='Size of beam search.')
 
         Seq2seqAgent.dictionary_class().add_cmdline_args(argparser)
         return agent
@@ -154,6 +156,7 @@ class Seq2seqAgent(Agent):
         self.metrics = {'loss': 0.0, 'num_tokens': 0}
         self.history = {}
         self.report_freq = opt['report_freq']
+        self.beam_size = opt['beam_size']
         states = {}
 
         # check for cuda
@@ -283,7 +286,7 @@ class Seq2seqAgent(Agent):
                 self.cands = torch.LongTensor(1, 1, 1)
 
             # set up criteria
-            self.criterion = nn.CrossEntropyLoss(ignore_index=self.NULL_IDX,
+            self.criterion = nn.NLLLoss(ignore_index=self.NULL_IDX,
                                                  size_average=False)
 
             if self.use_cuda:
@@ -445,11 +448,13 @@ class Seq2seqAgent(Agent):
         Update the model using the targets if available, otherwise rank
         candidates as well if they are available and param is set.
         """
+        import pdb
+        pdb.set_trace()
         text_cand_inds, loss_dict = None, None
         if is_training:
             self.model.train()
             self.zero_grad()
-            out = self.model(xs, ys)
+            out = self.model(xs, ys, beam_size=1)
             predictions, scores = out[0], out[1]
             loss = self.criterion(scores.view(-1, scores.size(-1)), ys.view(-1))
             # save loss to metrics
@@ -462,12 +467,12 @@ class Seq2seqAgent(Agent):
             self.update_params()
         else:
             self.model.eval()
-            out = self.model(xs, ys=None, cands=cands, valid_cands=valid_cands)
+            out = self.model(xs, ys=None, cands=cands, valid_cands=valid_cands, beam_size=self.beam_size)
             predictions, text_cand_inds = out[0], out[2]
 
             if ys is not None:
                 # calculate loss on targets
-                out = self.model(xs, ys)
+                out = self.model(xs, ys, beam_size=1)
                 scores = out[1]
                 loss = self.criterion(scores.view(-1, scores.size(-1)), ys.view(-1))
                 target_tokens = ys.ne(self.NULL_IDX).long().sum().data[0]
@@ -561,6 +566,8 @@ class Seq2seqAgent(Agent):
             report_freq = 0
         else:
             report_freq = self.report_freq
+        import pdb
+        pdb.set_trace()
         PaddingUtils.map_predictions(
             predictions.cpu().data, valid_inds, batch_reply, observations,
             self.dict, self.END_IDX, report_freq=report_freq, labels=labels,

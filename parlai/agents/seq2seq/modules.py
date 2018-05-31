@@ -53,7 +53,7 @@ class Seq2seq(nn.Module):
             self.ranker = Ranker(self.decoder, padding_idx=self.NULL_IDX,
                                  attn_type=opt['attention'])
 
-    def forward(self, xs, ys=None, cands=None, valid_cands=None, prev_enc=None):
+    def forward(self, xs, ys=None, cands=None, valid_cands=None, prev_enc=None, beam_size=1):
         """Get output predictions from the model.
 
         Arguments:
@@ -91,42 +91,97 @@ class Seq2seq(nn.Module):
             y_in = ys.narrow(1, 0, ys.size(1) - 1)
             xs = torch.cat([starts, y_in], 1)
             if self.attn_type == 'none':
-                preds, score, hidden = self.decoder(xs, hidden, enc_out, attn_mask)
+                preds, _, score, hidden = self.decoder(xs, hidden, enc_out, attn_mask, beam_size)
                 predictions.append(preds)
                 scores.append(score)
             else:
                 for i in range(ys.size(1)):
                     xi = xs.select(1, i)
-                    preds, score, hidden = self.decoder(xi, hidden, enc_out, attn_mask)
+                    preds, _, score, hidden = self.decoder(xi, hidden, enc_out, attn_mask, beam_size)
                     predictions.append(preds)
                     scores.append(score)
         else:
             # just predict
-            done = [False for _ in range(bsz)]
+            # done = [[False for _ in range(beam_size)] for _ in range(bsz)]
+            done = None
+            resp_len = None
             total_done = 0
             xs = starts
 
-            for _ in range(self.longest_label):
+            # !!!!! score is not taken care of for now, so the loss could be inaccurate !!!!!
+            for i in range(self.longest_label):
                 # generate at most longest_label tokens
-                preds, score, hidden = self.decoder(xs, hidden, enc_out, attn_mask)
-                scores.append(score)
+                if i == 0:
+                    parents, parent_scores, score, hidden = self.decoder(xs, hidden, enc_out, attn_mask, beam_size)
+                    parent_scores.log_()
+                    preds = parents
+                    parents = parents.unsqueeze(2)
+                else:
+                    # 1. expand: use previous beam-parents to generate beam-children
+                    cache_ind = [] # store indexes for each sub_beam
+                    cache_score = [] # store scores for each sub_beam
+                    cache_hidden = [] # store hidden states for each sub_beam
+                    cache_cell = [] # store cell states for each sub_beam
+                    cache_len = [] # store current sequence len
+
+                    for j in range(beam_size): # for each beam-parent
+                        if type(hidden) is tuple:
+                            children, children_scores, score, h = self.decoder(xs[:, j], hidden, enc_out, attn_mask, beam_size)
+                        else:
+                            children, children_scores, score, h = self.decoder(xs[:, j], (hidden[0][:, :, j, :].contiguous(), hidden[1][:, :, j, :].contiguous()), enc_out, attn_mask, beam_size)
+                        indices = [j for _ in range(beam_size)]
+                        children_scores.log_()
+                        # mask for done branch, and when one branch is done, we need to stop exploring of that branch. solution: only set one indice to 0, but others a very big factor, INF?
+                        mask = 1 - done
+                        mask = mask[:, indices]
+                        mask = Variable(torch.LongTensor(mask)).cuda().float()
+                        mask[:, 1:] = 1 / mask[:, 1:]
+                        children_scores *= mask
+                        ind_mod = (mask == 0) * 2
+                        ind_keep = (ind_mod == 0)
+                        children = ind_mod.long() + ind_keep.long() * children # predictions followed by a stop token can only be stop token
+                        # length for all branches
+                        # children_scores *= mask # finished branch will have zero scores afterwards
+                        cache_score.append(children_scores + parent_scores[:, indices])
+                        cache_hidden.append(h[0])
+                        cache_cell.append(h[1])
+                        cache_ind.append(children)
+                        cache_len.append(resp_len[:, indices].float() + 1)
+                    # 2. shrink: pick the biggest N beam-children, and cat them to beam-parents, go back to 1
+                    cache_hidden = torch.cat(cache_hidden, 1)
+                    cache_cell = torch.cat(cache_cell, 1)
+                    cache_ind = torch.cat(cache_ind, 1)
+                    cache_score = torch.cat(cache_score, 1)
+                    cache_len = torch.cat(cache_len, 1)
+                    _, y = (cache_score / cache_len ).topk(beam_size, dim=1) # normalize by string length so that it won't favour short sequences
+                    tmp = torch.arange(0, beam_size * bsz, beam_size).view(-1, 1)[:, [0 for _ in range(beam_size)]].long().cuda()
+                    mask = Variable(y.data.div(beam_size) + tmp)
+                    new_size = [cache_hidden.size(0), bsz, beam_size, cache_hidden.size(2)]
+                    new_hidden = cache_hidden[:, mask.view(-1), :].view(new_size)
+                    new_cell = cache_cell[:, mask.view(-1), :].view(new_size)
+                    hidden = [new_hidden, new_cell]
+                    parents = parents.view(-1, 1, parents.size(2))[mask.view(-1), :, :].view(bsz, beam_size, -1) # update previous predictions
+                    tmp *= beam_size
+                    preds = cache_ind.view(-1)[Variable(y.data+tmp).view(-1)].view(-1, beam_size)
+                    parents = torch.cat((parents, preds.unsqueeze(-1)), 2)
+                    parent_scores = cache_score.view(-1)[Variable(y.data+tmp).view(-1)].view(-1, beam_size) # update parent_scores
+
                 xs = preds
-                predictions.append(preds)
 
                 # check if we've produced the end token
-                for b in range(bsz):
-                    if not done[b]:
-                        # only add more tokens for examples that aren't done
-                        if preds.data[b][0] == self.END_IDX:
-                            # if we produced END, we're done
-                            done[b] = True
-                            total_done += 1
-                if total_done == bsz:
+                done = (preds == self.END_IDX).cpu().data.numpy()
+                total_done = done.sum()
+                resp_len = torch.sum(parents != self.END_IDX, dim=2).long()
+
+                if total_done == bsz * beam_size:
                     # no need to generate any more
                     break
 
         if predictions:
             predictions = torch.cat(predictions, 1)
+            predictions = predictions.unsqueeze(1)
+        else:
+            predictions = parents
         if scores:
             scores = torch.cat(scores, 1)
         return predictions, scores, text_cand_inds, encoder_states
@@ -250,7 +305,7 @@ class Decoder(nn.Module):
                                         attn_length=attn_length,
                                         attn_time=attn_time)
 
-    def forward(self, xs, hidden, encoder_output, attn_mask=None):
+    def forward(self, xs, hidden, encoder_output, attn_mask=None, beam_size=1):
         xes = F.dropout(self.lt(xs), p=self.dropout, training=self.training)
         if self.attn_time == 'pre':
             xes = self.attention(xes, hidden, encoder_output, attn_mask)
@@ -264,10 +319,13 @@ class Decoder(nn.Module):
         e = self.o2e(output)
         scores = F.dropout(self.e2s(e), p=self.dropout, training=self.training)
         # select top scoring index, excluding the padding symbol (at idx zero)
-        _max_score, idx = scores.narrow(2, 1, scores.size(2) - 1).max(2)
-        preds = idx.add_(1)
+        # 1. soft_max
+        scores = F.softmax(scores, dim=2)
+        # 2. get topk
+        max_scores, idx = scores.narrow(2, 1, scores.size(2) - 1).squeeze(1).topk(beam_size) # beam size
+        cands = idx.add_(1)
 
-        return preds, scores, new_hidden
+        return cands, max_scores, scores, new_hidden
 
 
 class Ranker(object):
@@ -339,7 +397,7 @@ class Ranker(object):
                 # feed in START + cands[:-2]
                 cands_in = cview.narrow(1, 0, cview.size(1) - 1)
                 starts = torch.cat([starts, cands_in], 1)
-            _preds, score, _h = self.decoder(starts, cands_hn, enc_out, attn_mask)
+            _preds, score, _h = self.decoder(starts, cands_hn, enc_out, attn_mask, beam_size)
 
             for i in range(cview.size(1)):
                 # calculate score at each token
@@ -375,7 +433,7 @@ class Ranker(object):
             for i in range(cview.size(1)):
                 # process one token at a time
                 _preds, score, _h = self.decoder(cs, cands_hn, cands_enc_out,
-                                             cands_attn_mask)
+                                                 cands_attn_mask, beam_size)
                 cs = cview.select(1, i)
                 non_nulls = cs.ne(self.NULL_IDX)
                 cand_lens += non_nulls.long()
