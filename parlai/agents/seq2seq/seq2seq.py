@@ -448,8 +448,6 @@ class Seq2seqAgent(Agent):
         Update the model using the targets if available, otherwise rank
         candidates as well if they are available and param is set.
         """
-        import pdb
-        pdb.set_trace()
         text_cand_inds, loss_dict = None, None
         if is_training:
             self.model.train()
@@ -566,12 +564,12 @@ class Seq2seqAgent(Agent):
             report_freq = 0
         else:
             report_freq = self.report_freq
-        import pdb
-        pdb.set_trace()
-        PaddingUtils.map_predictions(
-            predictions.cpu().data, valid_inds, batch_reply, observations,
-            self.dict, self.END_IDX, report_freq=report_freq, labels=labels,
-            answers=self.answers, ys=ys.data if ys is not None else None)
+        beam_size = predictions.size(1)
+        for i in range(beam_size):
+            PaddingUtils.map_predictions(
+                predictions[:, i, :].cpu().data, valid_inds, batch_reply, observations,
+                self.dict, self.END_IDX, report_freq=report_freq, labels=labels,
+                answers=self.answers, ys=ys.data if ys is not None else None)
 
         if text_cand_inds is not None:
             text_cand_inds = text_cand_inds.cpu().data

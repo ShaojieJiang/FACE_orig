@@ -117,7 +117,7 @@ class Seq2seq(nn.Module):
                     preds = parents
                     parents = parents.unsqueeze(2)
                 else:
-                    # 1. expand: use previous beam-parents to generate beam-children
+                    # 1. explore: use previous beam-parents to generate beam-children
                     cache_ind = [] # store indexes for each sub_beam
                     cache_score = [] # store scores for each sub_beam
                     cache_hidden = [] # store hidden states for each sub_beam
@@ -135,7 +135,8 @@ class Seq2seq(nn.Module):
                         mask = 1 - done
                         mask = mask[:, indices]
                         mask = Variable(torch.LongTensor(mask)).cuda().float()
-                        mask[:, 1:] = 1 / mask[:, 1:]
+                        if mask.size(1) > 1:
+                            mask[:, 1:] = 1 / mask[:, 1:]
                         children_scores *= mask
                         ind_mod = (mask == 0) * 2
                         ind_keep = (ind_mod == 0)
@@ -143,22 +144,22 @@ class Seq2seq(nn.Module):
                         # length for all branches
                         # children_scores *= mask # finished branch will have zero scores afterwards
                         cache_score.append(children_scores + parent_scores[:, indices])
-                        cache_hidden.append(h[0])
-                        cache_cell.append(h[1])
+                        cache_hidden.append(h[0].unsqueeze(2))
+                        cache_cell.append(h[1].unsqueeze(2))
                         cache_ind.append(children)
                         cache_len.append(resp_len[:, indices].float() + 1)
-                    # 2. shrink: pick the biggest N beam-children, and cat them to beam-parents, go back to 1
-                    cache_hidden = torch.cat(cache_hidden, 1)
-                    cache_cell = torch.cat(cache_cell, 1)
+                    # 2. rank: pick the biggest N beam-children, and cat them to beam-parents, go back to 1
+                    cache_hidden = torch.cat(cache_hidden, 2)
+                    cache_cell = torch.cat(cache_cell, 2)
                     cache_ind = torch.cat(cache_ind, 1)
                     cache_score = torch.cat(cache_score, 1)
                     cache_len = torch.cat(cache_len, 1)
-                    _, y = (cache_score / cache_len ).topk(beam_size, dim=1) # normalize by string length so that it won't favour short sequences
+                    _, y = (cache_score - cache_len.log()).topk(beam_size, dim=1) # normalize by string length so that it won't favour short sequences
                     tmp = torch.arange(0, beam_size * bsz, beam_size).view(-1, 1)[:, [0 for _ in range(beam_size)]].long().cuda()
                     mask = Variable(y.data.div(beam_size) + tmp)
-                    new_size = [cache_hidden.size(0), bsz, beam_size, cache_hidden.size(2)]
-                    new_hidden = cache_hidden[:, mask.view(-1), :].view(new_size)
-                    new_cell = cache_cell[:, mask.view(-1), :].view(new_size)
+                    new_size = [cache_hidden.size(0), bsz, beam_size, cache_hidden.size(3)]
+                    new_hidden = cache_hidden.view(new_size[0], -1, new_size[3])[:, mask.view(-1), :].view(new_size)
+                    new_cell = cache_cell.view(new_size[0], -1, new_size[3])[:, mask.view(-1), :].view(new_size)
                     hidden = [new_hidden, new_cell]
                     parents = parents.view(-1, 1, parents.size(2))[mask.view(-1), :, :].view(bsz, beam_size, -1) # update previous predictions
                     tmp *= beam_size
