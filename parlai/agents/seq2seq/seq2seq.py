@@ -156,7 +156,6 @@ class Seq2seqAgent(Agent):
         self.metrics = {'loss': 0.0, 'num_tokens': 0}
         self.history = {}
         self.report_freq = opt['report_freq']
-        self.word_freq = torch.zeros(self.opt['dict_maxtokens'])
         states = {}
 
         # check for cuda
@@ -273,7 +272,7 @@ class Seq2seqAgent(Agent):
 
             if self.use_cuda:
                 self.model.cuda()
-
+        self.word_freq = torch.zeros(len(self.dict))
         if hasattr(self, 'model'):
             # if model was built, do more setup
             self.clip = opt.get('gradient_clip', -1)
