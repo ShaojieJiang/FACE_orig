@@ -273,6 +273,8 @@ class Seq2seqAgent(Agent):
             if self.use_cuda:
                 self.model.cuda()
         self.word_freq = torch.zeros(len(self.dict))
+        if 'word_freq' in states:
+            self.word_freq = states['word_freq']
         if hasattr(self, 'model'):
             # if model was built, do more setup
             self.clip = opt.get('gradient_clip', -1)
@@ -446,7 +448,7 @@ class Seq2seqAgent(Agent):
         self.answers[batch_idx] = None
         return obs
 
-    def loss_weight(self, predictions):
+    def update_frequency(self, predictions):
         curr = Counter()
         for pred in predictions.cpu().data.numpy():
             curr.update(pred)
@@ -454,6 +456,8 @@ class Seq2seqAgent(Agent):
         self.word_freq *= 0.9 # here the decaying factor should be a hyper-parameter
         for k, v in curr.most_common():
             self.word_freq[k] += v
+        
+    def loss_weight(self):
         shift = torch.max(self.word_freq) / 2 # this will make the weight of most frequent token go zero
         weight = F.sigmoid(-self.word_freq + shift)
         weight = weight / torch.sum(weight) * weight.size(0) # normalization
@@ -473,7 +477,8 @@ class Seq2seqAgent(Agent):
             self.zero_grad()
             out = self.model(xs, ys)
             predictions, scores = out[0], out[1]
-            self.criterion.weight = self.loss_weight(predictions)
+            self.update_frequency(predictions)
+            self.criterion.weight = self.loss_weight()
             loss = self.criterion(scores.view(-1, scores.size(-1)), ys.view(-1))
             # save loss to metrics
             target_tokens = ys.ne(self.NULL_IDX).long().sum().data[0]
@@ -622,6 +627,7 @@ class Seq2seqAgent(Agent):
             model['optimizer'] = self.optimizer.state_dict()
             model['optimizer_type'] = self.opt['optimizer']
             model['opt'] = self.opt
+            model['word_freq'] = self.word_freq
 
             with open(path, 'wb') as write:
                 torch.save(model, write)
