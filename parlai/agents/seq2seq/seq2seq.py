@@ -458,9 +458,10 @@ class Seq2seqAgent(Agent):
             self.word_freq[k] += v
         
     def loss_weight(self):
-        shift = torch.max(self.word_freq) / 2 # this will make the weight of most frequent token go zero
-        weight = F.sigmoid(-self.word_freq + shift)
-        weight = weight / torch.sum(weight) * weight.size(0) # normalization
+        RF = self.word_freq / self.word_freq.sum() # relative frequency
+        k = -1 / RF.max()
+        weight = k * RF + 1
+        weight = weight / weight.sum() * weight.size(0) # normalization
         return weight
         
     def predict(self, xs, ys=None, cands=None, valid_cands=None, is_training=False):
