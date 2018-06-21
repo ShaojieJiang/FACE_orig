@@ -53,6 +53,67 @@ class Seq2seq(nn.Module):
             self.ranker = Ranker(self.decoder, padding_idx=self.NULL_IDX,
                                  attn_type=opt['attention'])
 
+    def beam_search(self, xs, hidden, enc_out, attn_mask, beam_size, parents=None, cumu_scores=None, done=None):
+        bsz = len(xs)
+        if xs.size(1) == 1: # first generation
+            parents, cumu_scores, score, hidden = self.decoder(xs, hidden, enc_out, attn_mask, beam_size)
+            cumu_scores.log_()
+            preds = parents
+            parents = parents.unsqueeze(2)
+        else: # following generations
+            # 1. grow: use previous beam-parents to generate beam-children
+            branch_ind = [] # store indexes for each sub_beam
+            branch_score = [] # store scores for each sub_beam
+            branch_hidden = [] # store hidden states for each sub_beam
+            branch_cell = [] # store cell states for each sub_beam
+            branch_len = [] # store current sequence len
+            resp_len = torch.sum(parents != self.END_IDX, dim=2).long()
+
+            for j in range(beam_size): # for each beam-parent
+                if type(hidden) is tuple:
+                    children, children_scores, score, h = self.decoder(xs[:, j], hidden, enc_out, attn_mask, beam_size)
+                else:
+                    children, children_scores, score, h = self.decoder(xs[:, j], (hidden[0][:, :, j, :].contiguous(), hidden[1][:, :, j, :].contiguous()), enc_out, attn_mask, beam_size)
+                indices = [j for _ in range(beam_size)]
+                children_scores.log_()
+                # mask for done branch, and when one branch is done, we need to stop exploring of that branch. solution: use a mask
+                mask_done = 1 - done
+                mask_done = mask_done[:, indices]
+                mask_done = Variable(torch.LongTensor(mask_done)).cuda().float()
+                if mask_done.size(1) > 1:
+                    mask_done[:, 1:] = 1 / mask_done[:, 1:]
+                children_scores *= mask_done
+                ind_mod = (mask_done == 0) * 2
+                ind_keep = (ind_mod == 0)
+                children = ind_mod.long() + ind_keep.long() * children # predictions followed by a stop token can only be stop token
+                # length for all branches
+                # children_scores *= mask_done # finished branch will have zero scores afterwards
+                branch_score.append(children_scores + cumu_scores[:, indices])
+                branch_hidden.append(h[0].unsqueeze(2))
+                branch_cell.append(h[1].unsqueeze(2))
+                branch_ind.append(children)
+                branch_len.append(resp_len[:, indices].float() + 1)
+            # 2. trim: pick the biggest N beam-children, and cat them to beam-parents, go back to 1
+            beam_hidden = torch.cat(branch_hidden, 2)
+            beam_cell = torch.cat(branch_cell, 2)
+            beam_ind = torch.cat(branch_ind, 1)
+            beam_score = torch.cat(branch_score, 1)
+            beam_len = torch.cat(branch_len, 1)
+            _, y = (beam_score - beam_len.log()).topk(beam_size, dim=1) # normalize by string length so that it won't favour short sequences
+            offset = torch.arange(0, beam_size * bsz, beam_size).view(-1, 1)[:, [0 for _ in range(beam_size)]].long().cuda()
+            trim_mask = Variable(y.data.div(beam_size) + offset)
+            new_size = [beam_hidden.size(0), bsz, beam_size, beam_hidden.size(3)]
+            new_hidden = beam_hidden.view(new_size[0], -1, new_size[3])[:, trim_mask.view(-1), :].view(new_size)
+            new_cell = beam_cell.view(new_size[0], -1, new_size[3])[:, trim_mask.view(-1), :].view(new_size)
+            hidden = [new_hidden, new_cell]
+            parents = parents.view(-1, 1, parents.size(2))[trim_mask.view(-1), :, :].view(bsz, beam_size, -1) # update previous predictions
+            offset *= beam_size
+            preds = beam_ind.view(-1)[Variable(y.data+offset).view(-1)].view(-1, beam_size)
+            parents = torch.cat((parents, preds.unsqueeze(-1)), 2)
+            cumu_scores = beam_score.view(-1)[Variable(y.data+offset).view(-1)].view(-1, beam_size) # update cumu_scores
+
+        return parents, cumu_scores, score, hidden
+
     def forward(self, xs, ys=None, cands=None, valid_cands=None, prev_enc=None, beam_size=1):
         """Get output predictions from the model.
 
@@ -104,75 +165,21 @@ class Seq2seq(nn.Module):
             # just predict
             # done = [[False for _ in range(beam_size)] for _ in range(bsz)]
             done = None
-            resp_len = None
             total_done = 0
             xs = starts
 
             # !!!!! score is not taken care of for now, so the loss could be inaccurate !!!!!
-            for i in range(self.longest_label):
-                # generate at most longest_label tokens
+            # cumu_scores, done, preds = None, None, None
+            for i in range(self.longest_label): # generate at most longest_label tokens
                 if i == 0:
-                    parents, parent_scores, score, hidden = self.decoder(xs, hidden, enc_out, attn_mask, beam_size)
-                    parent_scores.log_()
-                    preds = parents
-                    parents = parents.unsqueeze(2)
+                    parents, cumu_scores, _, hidden = self.beam_search(xs, hidden, enc_out, attn_mask, beam_size)
                 else:
-                    # 1. explore: use previous beam-parents to generate beam-children
-                    cache_ind = [] # store indexes for each sub_beam
-                    cache_score = [] # store scores for each sub_beam
-                    cache_hidden = [] # store hidden states for each sub_beam
-                    cache_cell = [] # store cell states for each sub_beam
-                    cache_len = [] # store current sequence len
-
-                    for j in range(beam_size): # for each beam-parent
-                        if type(hidden) is tuple:
-                            children, children_scores, score, h = self.decoder(xs[:, j], hidden, enc_out, attn_mask, beam_size)
-                        else:
-                            children, children_scores, score, h = self.decoder(xs[:, j], (hidden[0][:, :, j, :].contiguous(), hidden[1][:, :, j, :].contiguous()), enc_out, attn_mask, beam_size)
-                        indices = [j for _ in range(beam_size)]
-                        children_scores.log_()
-                        # mask for done branch, and when one branch is done, we need to stop exploring of that branch. solution: only set one indice to 0, but others a very big factor, INF?
-                        mask = 1 - done
-                        mask = mask[:, indices]
-                        mask = Variable(torch.LongTensor(mask)).cuda().float()
-                        if mask.size(1) > 1:
-                            mask[:, 1:] = 1 / mask[:, 1:]
-                        children_scores *= mask
-                        ind_mod = (mask == 0) * 2
-                        ind_keep = (ind_mod == 0)
-                        children = ind_mod.long() + ind_keep.long() * children # predictions followed by a stop token can only be stop token
-                        # length for all branches
-                        # children_scores *= mask # finished branch will have zero scores afterwards
-                        cache_score.append(children_scores + parent_scores[:, indices])
-                        cache_hidden.append(h[0].unsqueeze(2))
-                        cache_cell.append(h[1].unsqueeze(2))
-                        cache_ind.append(children)
-                        cache_len.append(resp_len[:, indices].float() + 1)
-                    # 2. rank: pick the biggest N beam-children, and cat them to beam-parents, go back to 1
-                    cache_hidden = torch.cat(cache_hidden, 2)
-                    cache_cell = torch.cat(cache_cell, 2)
-                    cache_ind = torch.cat(cache_ind, 1)
-                    cache_score = torch.cat(cache_score, 1)
-                    cache_len = torch.cat(cache_len, 1)
-                    _, y = (cache_score - cache_len.log()).topk(beam_size, dim=1) # normalize by string length so that it won't favour short sequences
-                    tmp = torch.arange(0, beam_size * bsz, beam_size).view(-1, 1)[:, [0 for _ in range(beam_size)]].long().cuda()
-                    mask = Variable(y.data.div(beam_size) + tmp)
-                    new_size = [cache_hidden.size(0), bsz, beam_size, cache_hidden.size(3)]
-                    new_hidden = cache_hidden.view(new_size[0], -1, new_size[3])[:, mask.view(-1), :].view(new_size)
-                    new_cell = cache_cell.view(new_size[0], -1, new_size[3])[:, mask.view(-1), :].view(new_size)
-                    hidden = [new_hidden, new_cell]
-                    parents = parents.view(-1, 1, parents.size(2))[mask.view(-1), :, :].view(bsz, beam_size, -1) # update previous predictions
-                    tmp *= beam_size
-                    preds = cache_ind.view(-1)[Variable(y.data+tmp).view(-1)].view(-1, beam_size)
-                    parents = torch.cat((parents, preds.unsqueeze(-1)), 2)
-                    parent_scores = cache_score.view(-1)[Variable(y.data+tmp).view(-1)].view(-1, beam_size) # update parent_scores
-
-                xs = preds
+                    parents, cumu_scores, _, hidden = self.beam_search(xs, hidden, enc_out, attn_mask, beam_size, parents, cumu_scores, done)
+                xs = parents[:, :, -1]
 
                 # check if we've produced the end token
-                done = (preds == self.END_IDX).cpu().data.numpy()
+                done = (xs == self.END_IDX).cpu().data.numpy()
                 total_done = done.sum()
-                resp_len = torch.sum(parents != self.END_IDX, dim=2).long()
 
                 if total_done == bsz * beam_size:
                     # no need to generate any more

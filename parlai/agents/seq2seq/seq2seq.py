@@ -566,6 +566,8 @@ class Seq2seqAgent(Agent):
             report_freq = self.report_freq
         beam_size = predictions.size(1)
         for i in range(beam_size):
+            import pdb
+            pdb.set_trace()
             PaddingUtils.map_predictions(
                 predictions[:, i, :].cpu().data, valid_inds, batch_reply, observations,
                 self.dict, self.END_IDX, report_freq=report_freq, labels=labels,
