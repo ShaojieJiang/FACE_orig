@@ -565,13 +565,11 @@ class Seq2seqAgent(Agent):
         else:
             report_freq = self.report_freq
         beam_size = predictions.size(1)
-        for i in range(beam_size):
-            import pdb
-            pdb.set_trace()
-            PaddingUtils.map_predictions(
-                predictions[:, i, :].cpu().data, valid_inds, batch_reply, observations,
-                self.dict, self.END_IDX, report_freq=report_freq, labels=labels,
-                answers=self.answers, ys=ys.data if ys is not None else None)
+        # for i in range(beam_size):
+        PaddingUtils.map_predictions(
+            predictions[:, 0, :].cpu().data, valid_inds, batch_reply, observations,
+            self.dict, self.END_IDX, report_freq=report_freq, labels=labels,
+            answers=self.answers, ys=ys.data if ys is not None else None)
 
         if text_cand_inds is not None:
             text_cand_inds = text_cand_inds.cpu().data
