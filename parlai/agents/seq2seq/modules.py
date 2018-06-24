@@ -68,9 +68,10 @@ class Seq2seq(nn.Module):
         max_ind = max_ind.data.cpu().numpy().tolist()
         max_len = 0
         for i in range(bsz): # keep the 1-best for all
-            max_id = np.argmax(N_best_score[i])
-            if N_best_score[i][max_id] > max_score[i]:
-                N_best_resp[i] = N_best_resp[i][max_id]
+            if N_best_score[i]:
+                max_id = np.argmax(N_best_score[i])
+                if N_best_score[i][max_id] > max_score[i]:
+                    N_best_resp[i] = N_best_resp[i][max_id]
             else:
                 N_best_resp[i] = beam_response[i, max_ind[i], :].data.cpu().numpy().tolist()
             if max_len < len(N_best_resp[i]):
@@ -377,8 +378,11 @@ class Decoder(nn.Module):
         # select top scoring index, excluding the padding symbol (at idx zero)
         # 1. soft_max
         scores = F.softmax(scores, dim=2)
+        size = [scores.size(0), scores.size(2) - 1]
+        mask = Variable(torch.ones(size)).cuda()
+        mask[:, 2] = 0
         # 2. get topk
-        max_scores, idx = scores.narrow(2, 1, scores.size(2) - 1).squeeze(1).topk(beam_size) # beam size
+        max_scores, idx = (scores.narrow(2, 1, scores.size(2) - 1).squeeze(1) * mask).topk(beam_size) # beam size
         cands = idx.add_(1)
 
         return cands, max_scores, scores, new_hidden
