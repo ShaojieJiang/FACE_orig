@@ -202,7 +202,7 @@ class Seq2seqAgent(Agent):
             if init_model is not None:
                 # load model parameters if available
                 print('[ Loading existing model params from {} ]'.format(init_model))
-                new_opt, states = self.load(init_model)
+                new_opt, states, reverse_states = self.load(init_model)
                 # override model-specific options with stored ones
                 opt = self.override_opt(new_opt)
                 self.opt = opt
@@ -232,6 +232,13 @@ class Seq2seqAgent(Agent):
                 opt, len(self.dict), padding_idx=self.NULL_IDX,
                 start_idx=self.START_IDX, end_idx=self.END_IDX,
                 longest_label=states.get('longest_label', 1))
+
+            import pdb; pdb.set_trace()
+            opt['attention'] = 'none'
+            self.reverse_model = self.model_class(
+                opt, len(self.dict), padding_idx=self.NULL_IDX,
+                start_idx=self.START_IDX, end_idx=self.END_IDX,
+                longest_label=reverse_states.get('longest_label', 1))
 
             if opt['embedding_type'] != 'random':
                 # set up preinitialized embeddings
@@ -470,7 +477,7 @@ class Seq2seqAgent(Agent):
             self.update_params()
         else:
             self.model.eval()
-            out = self.model(xs, ys=None, cands=cands, valid_cands=valid_cands, beam_size=self.beam_size)
+            out = self.model(xs, ys=None, cands=cands, valid_cands=valid_cands, beam_size=self.beam_size, reverse_model=self.reverse_model) # pass the reverse model here
             predictions, text_cand_inds = out[0], out[2]
 
             if ys is not None:
@@ -622,7 +629,9 @@ class Seq2seqAgent(Agent):
     def load(self, path):
         """Return opt and model states."""
         states = torch.load(path, map_location=lambda cpu, _: cpu)
-        return states['opt'], states
+        reverse_path = path # + '.reverse' # file path for reverse model
+        reverse_states = torch.load(path, map_location=lambda cpu, _: cpu)
+        return states['opt'], states, reverse_states
 
     def receive_metrics(self, metrics_dict):
         """Use the metrics to decide when to adjust LR schedule."""
