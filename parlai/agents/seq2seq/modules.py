@@ -62,23 +62,44 @@ class Seq2seq(nn.Module):
         return lm_scores.view(-1, 1)[inds.view(-1)].view(preds.size()).log_()
     def best_response(self, xs, N_best_resp, N_best_score, beam_response, beam_score, reverse_model):
         bsz = len(N_best_score)
+        start = Variable(self.START, requires_grad=False)
+        starts = start.expand(bsz, 1)
+        xs = torch.cat([starts, xs], 1)
+
         lambda_bidi = 0.01
         max_len_bidi = 5
         gamma_bidi = 0.01
         # if i > max_len_bidi:
         #     lambda_bidi = 0
         # use reverse model here for calculating p(s|t)
-        import pdb; pdb.set_trace()
+        for i in range(bsz):
+            if not N_best_score[i]:
+                continue
+            for j in range(len(N_best_resp[i])):
+                ys = Variable(torch.LongTensor(N_best_resp[i][j])).cuda()
+                _, hidden = reverse_model.encoder(ys.view(1, -1))
+                reverse_score = reverse_model.decoder.reverse_score(xs[i, :].view(1, -1), hidden)
+                N_best_score[i][j] += lambda_bidi * reverse_score.data[0] + gamma_bidi * ys.size(0)
+
+        for i in range(bsz):
+            for j in range(beam_score.size(1)):
+                ys = beam_response[i, j, :]
+                _, hidden = reverse_model.encoder(ys.view(1, -1))
+                reverse_score = reverse_model.decoder.reverse_score(xs[i, :].view(1, -1), hidden)
+                beam_score[i, j] = beam_score[i, j] + lambda_bidi * reverse_score.data[0] + gamma_bidi * ys.size(0)
+
 
         max_score, max_ind = beam_score.max(dim=1)
         max_score = max_score.data.cpu().numpy().tolist()
         max_ind = max_ind.data.cpu().numpy().tolist()
-        max_len = 0
+        max_len=0
         for i in range(bsz): # keep the 1-best for all
             if N_best_score[i]:
                 max_id = np.argmax(N_best_score[i])
                 if N_best_score[i][max_id] > max_score[i]:
                     N_best_resp[i] = N_best_resp[i][max_id]
+                else:
+                    N_best_resp[i] = beam_response[i, max_ind[i], :].data.cpu().numpy().tolist()
             else:
                 N_best_resp[i] = beam_response[i, max_ind[i], :].data.cpu().numpy().tolist()
             if max_len < len(N_best_resp[i]):
@@ -343,8 +364,12 @@ class Decoder(nn.Module):
         e = self.o2e(output)
         scores = self.e2s(e)
         scores = F.softmax(scores, dim=2)
+        inds = xs.cpu().data.numpy().tolist()[0][1:]
+        log_score = 0
+        for i, ind in enumerate(inds):
+            log_score += scores[:, i, ind].log()
 
-        return scores
+        return log_score
     
     def forward(self, xs, hidden, encoder_output, attn_mask=None, beam_size=1):
         xes = F.dropout(self.lt(xs), p=self.dropout, training=self.training)

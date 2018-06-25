@@ -233,8 +233,8 @@ class Seq2seqAgent(Agent):
                 start_idx=self.START_IDX, end_idx=self.END_IDX,
                 longest_label=states.get('longest_label', 1))
 
-            import pdb; pdb.set_trace()
-            opt['attention'] = 'none'
+            # deep copy
+            # opt['attention'] = 'none'
             self.reverse_model = self.model_class(
                 opt, len(self.dict), padding_idx=self.NULL_IDX,
                 start_idx=self.START_IDX, end_idx=self.END_IDX,
@@ -268,19 +268,24 @@ class Seq2seqAgent(Agent):
                     if w in embs.stoi:
                         vec = t(embs.vectors[embs.stoi[w]])
                         self.model.decoder.lt.weight.data[i] = vec
+                        self.reverse_model.decoder.lt.weight.data[i] = vec
                         cnt += 1
                         if opt['lookuptable'] in ['unique', 'dec_out']:
                             # also set encoder lt, since it's not shared
                             self.model.encoder.lt.weight.data[i] = vec
+                            self.reverse_model.encoder.lt.weight.data[i] = vec
                 print('Seq2seq: initialized embeddings for {} tokens from {}.'
                       ''.format(cnt, init))
 
             if states:
                 # set loaded states if applicable
                 self.model.load_state_dict(states['model'])
+                self.reverse_model.load_state_dict(reverse_states['model'])
+                self.reverse_model.eval()
 
             if self.use_cuda:
                 self.model.cuda()
+                self.reverse_model.cuda()
 
         if hasattr(self, 'model'):
             # if model was built, do more setup
