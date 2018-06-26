@@ -72,6 +72,8 @@ class Seq2seq(nn.Module):
                 max_id = np.argmax(N_best_score[i])
                 if N_best_score[i][max_id] > max_score[i]:
                     N_best_resp[i] = N_best_resp[i][max_id]
+                else:
+                    N_best_resp[i] = beam_response[i, max_ind[i], :].data.cpu().numpy().tolist()
             else:
                 N_best_resp[i] = beam_response[i, max_ind[i], :].data.cpu().numpy().tolist()
             if max_len < len(N_best_resp[i]):
