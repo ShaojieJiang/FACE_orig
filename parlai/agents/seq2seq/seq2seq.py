@@ -284,7 +284,7 @@ class Seq2seqAgent(Agent):
                 self.cands = torch.LongTensor(1, 1, 1)
 
             # set up criteria
-            self.criterion = nn.CrossEntropyLoss(ignore_index=self.NULL_IDX,
+            self.criterion = nn.NLLLoss(ignore_index=self.NULL_IDX,
                                                  size_average=False)
 
             if self.use_cuda:
@@ -456,7 +456,7 @@ class Seq2seqAgent(Agent):
             self.zero_grad()
             out = self.model(xs, ys)
             predictions, scores = out[0], out[1]
-            loss = self.criterion(scores.view(-1, scores.size(-1)), ys.view(-1))
+            loss = self.criterion(scores.log().view(-1, scores.size(-1)), ys.view(-1))
             # save loss to metrics
             target_tokens = ys.ne(self.NULL_IDX).long().sum().data[0]
             self.metrics['loss'] += loss.double().data[0]
