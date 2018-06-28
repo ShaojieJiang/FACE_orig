@@ -264,15 +264,15 @@ class Decoder(nn.Module):
         e = self.o2e(output)
         scores = F.dropout(self.e2s(e), p=self.dropout, training=self.training)
         # select top scoring index, excluding the padding symbol (at idx zero)
-        scores = F.softmax(scores, dim=2)
 
         if self.training:
             _max_score, idx = scores.narrow(2, 1, scores.size(2) - 1).max(2)
         else:
-            size = [scores.size(0), scores.size(2) - 1]
+            soft_scores = F.softmax(scores, dim=2)
+            size = [soft_scores.size(0), soft_scores.size(2) - 1]
             mask = Variable(torch.ones(size)).cuda()
             mask[:, 2] = 0
-            _max_scores, idx = (scores.narrow(2, 1, scores.size(2) - 1) * mask.unsqueeze(1)).max(2)
+            _max_scores, idx = (soft_scores.narrow(2, 1, soft_scores.size(2) - 1) * mask.unsqueeze(1)).max(2)
         preds = idx.add_(1)
 
         return preds, scores, new_hidden
