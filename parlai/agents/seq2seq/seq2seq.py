@@ -142,7 +142,7 @@ class Seq2seqAgent(Agent):
                                 'so they are not updated during training.')
         agent.add_argument('-rf', '--report-freq', type=float, default=0.001,
                            help='Report frequency of prediction during eval.')
-        agent.add_argument('-beam', '--beam-size', type=int, default=15,
+        agent.add_argument('-beam', '--beam-size', type=int, default=3,
                            help='Size of beam search.')
         agent.add_argument('-lam', '--lambda', type=float, default=0.1,
                            help='Lambda anti-LM.')
@@ -481,6 +481,7 @@ class Seq2seqAgent(Agent):
             self.update_params()
         else:
             self.model.eval()
+            xs.volatile, ys.volatile = True, True
             out = self.model(xs, ys=None, cands=cands, valid_cands=valid_cands, beam_size=self.beam_size)
             predictions, text_cand_inds = out[0], out[2]
 

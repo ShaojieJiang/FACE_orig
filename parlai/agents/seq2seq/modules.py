@@ -84,6 +84,8 @@ class Seq2seq(nn.Module):
     def beam_search(self, xs, hidden, enc_out, attn_mask, beam_size):
         bsz = len(xs)
         h0 = Variable(torch.zeros(hidden[0].size()).cuda(), requires_grad=False)
+        if not self.training:
+            h0.volatile = True
         lm_hidden = (h0, h0)
 
         lambda_anti_lm = self.opt['lambda']
@@ -109,10 +111,6 @@ class Seq2seq(nn.Module):
                 # 1. grow: use previous beam-parents to generate beam-children
                 branch_ind = [] # store indexes for each sub_beam
                 branch_score = [] # store scores for each sub_beam
-                branch_hidden = [] # store hidden states for each sub_beam
-                branch_cell = [] # store cell states for each sub_beam
-                branch_lm_hidden = []
-                branch_lm_cell = []
                 branch_len = [] # store current sequence len
                 resp_len = torch.sum(parents != self.END_IDX, dim=2).long()
 
@@ -121,8 +119,8 @@ class Seq2seq(nn.Module):
                         children, children_scores, score, h = self.decoder(xs[:, j], hidden, enc_out, attn_mask, beam_size)
                         lm_scores, lm_h = self.decoder.lm_score(xs[:, j].unsqueeze(-1), lm_hidden)
                     else:
-                        children, children_scores, score, h = self.decoder(xs[:, j], (hidden[0][:, :, j, :].contiguous(), hidden[1][:, :, j, :].contiguous()), enc_out, attn_mask, beam_size)
-                        lm_scores, lm_h = self.decoder.lm_score(xs[:, j].unsqueeze(-1), (lm_hidden[0][:, :, j, :].contiguous(), lm_hidden[1][:, :, j, :].contiguous()))
+                        children, children_scores, score, h = self.decoder(xs[:, j], hidden[j], enc_out, attn_mask, beam_size)
+                        lm_scores, lm_h = self.decoder.lm_score(xs[:, j].unsqueeze(-1), lm_hidden[j])
                     # find the node which is terminated
                     ended = (children == self.END_IDX).nonzero()
                     if len(ended):
@@ -145,31 +143,32 @@ class Seq2seq(nn.Module):
                     new_score = new_score + mask_done
 
                     branch_score.append(new_score)
-                    branch_hidden.append(h[0].unsqueeze(2))
-                    branch_cell.append(h[1].unsqueeze(2))
-                    branch_lm_hidden.append(lm_h[0].unsqueeze(2))
-                    branch_lm_cell.append(lm_h[1].unsqueeze(2))
                     branch_ind.append(children)
                     branch_len.append(resp_len[:, indices].float() + 1)
                 # 2. trim: pick the biggest N beam-children, and cat them to beam-parents, go back to 1
-                beam_hidden = torch.cat(branch_hidden, 2)
-                beam_cell = torch.cat(branch_cell, 2)
-                beam_lm_hidden = torch.cat(branch_lm_hidden, 2)
-                beam_lm_cell = torch.cat(branch_lm_cell, 2)
                 beam_ind = torch.cat(branch_ind, 1)
                 beam_score = torch.cat(branch_score, 1)
                 beam_len = torch.cat(branch_len, 1)
                 _, y = beam_score.topk(beam_size, dim=1) # normalize by string length so that it won't favour short sequences
                 offset = torch.arange(0, beam_size * bsz, beam_size).view(-1, 1)[:, [0 for _ in range(beam_size)]].long().cuda()
                 trim_mask = Variable(y.data.div(beam_size) + offset)
-                new_size = [beam_hidden.size(0), bsz, beam_size, beam_hidden.size(3)]
-                new_hidden = beam_hidden.view(new_size[0], -1, new_size[3])[:, trim_mask.view(-1), :].view(new_size)
-                new_cell = beam_cell.view(new_size[0], -1, new_size[3])[:, trim_mask.view(-1), :].view(new_size)
-                new_lm_hidden = beam_lm_hidden.view(new_size[0], -1, new_size[3])[:, trim_mask.view(-1), :].view(new_size)
-                new_lm_cell = beam_lm_cell.view(new_size[0], -1, new_size[3])[:, trim_mask.view(-1), :].view(new_size)
-                hidden = [new_hidden, new_cell]
-                lm_hidden = [new_lm_hidden, new_lm_cell]
                 parents = parents.view(-1, 1, parents.size(2))[trim_mask.view(-1), :, :].view(bsz, beam_size, -1) # update previous predictions
+                last_pred = parents[:, :, -1]
+                new_hidden = []
+                new_lm_hidden = []
+                for j in range(beam_size): # for each beam-parent
+                    # use last_pred as input
+                    if type(hidden) is tuple:
+                        _, _, _, h = self.decoder(last_pred[:, j], hidden, enc_out, attn_mask, beam_size)
+                        _, lm_h = self.decoder.lm_score(last_pred[:, j].unsqueeze(-1), lm_hidden)
+                    else:
+                        _, _, _, h = self.decoder(last_pred[:, j], hidden[j], enc_out, attn_mask, beam_size)
+                        _, lm_h = self.decoder.lm_score(last_pred[:, j].unsqueeze(-1), lm_hidden[j])
+                    new_hidden.append(h)
+                    new_lm_hidden.append(lm_h)
+                    # save the hidden states for later use
+                hidden = new_hidden
+                lm_hidden = new_lm_hidden
                 offset *= beam_size
                 preds = beam_ind.view(-1)[Variable(y.data+offset).view(-1)].view(-1, beam_size)
                 parents = torch.cat((parents, preds.unsqueeze(-1)), 2)
@@ -205,6 +204,8 @@ class Seq2seq(nn.Module):
         encoder_states = (enc_out, hidden)
         attn_mask = xs.ne(0).float() if self.attn_type != 'none' else None
         start = Variable(self.START, requires_grad=False)
+        if not self.training:
+            start.volatile = True
         starts = start.expand(bsz, 1)
 
         predictions = []
@@ -385,6 +386,8 @@ class Decoder(nn.Module):
         mask[:, 2] = 0
         # 2. get topk
         max_scores, idx = (scores.narrow(2, 1, scores.size(2) - 1).squeeze(1) * mask).topk(beam_size) # beam size
+        if not self.training:
+            idx.volatile = True
         cands = idx.add_(1)
 
         return cands, max_scores, scores, new_hidden
