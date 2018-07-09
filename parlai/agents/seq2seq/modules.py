@@ -86,9 +86,9 @@ class Seq2seq(nn.Module):
         h0 = Variable(torch.zeros(hidden[0].size()).cuda(), requires_grad=False)
         lm_hidden = (h0, h0)
 
-        lambda_anti_lm = 0.01
-        max_len_anti_lm = 5
-        gamma_anti_lm = 0.01
+        lambda_anti_lm = self.opt['lambda']
+        max_len_anti_lm = self.opt['max_len']
+        gamma_anti_lm = self.opt['gamma']
         N_best_resp = [[] for _ in range(bsz)]
         N_best_score = [[] for _ in range(bsz)]
 

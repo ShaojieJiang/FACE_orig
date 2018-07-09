@@ -142,7 +142,13 @@ class Seq2seqAgent(Agent):
                                 'so they are not updated during training.')
         agent.add_argument('-rf', '--report-freq', type=float, default=0.001,
                            help='Report frequency of prediction during eval.')
-        agent.add_argument('-beam', '--beam-size', type=int, default=3,
+        agent.add_argument('-beam', '--beam-size', type=int, default=15,
+                           help='Size of beam search.')
+        agent.add_argument('-lam', '--lambda', type=float, default=0.1,
+                           help='Lambda anti-LM.')
+        agent.add_argument('-maxl', '--max-len', type=int, default=5,
+                           help='Max len anti-LM.')
+        agent.add_argument('-gam', '--gamma', type=float, default=0.1,
                            help='Size of beam search.')
 
         Seq2seqAgent.dictionary_class().add_cmdline_args(argparser)
