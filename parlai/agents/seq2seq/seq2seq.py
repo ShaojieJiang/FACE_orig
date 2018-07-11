@@ -17,6 +17,7 @@ import torch.nn as nn
 
 from collections import deque, Counter
 from nltk.util import ngrams
+from nltk.translate.bleu_score import sentence_bleu, corpus_bleu, SmoothingFunction
 
 import os
 import math
@@ -143,6 +144,12 @@ class Seq2seqAgent(Agent):
                            help='Report frequency of prediction during eval.')
         agent.add_argument('-beam', '--beam-size', type=int, default=3,
                            help='Size of beam search.')
+        agent.add_argument('-lam', '--lambda', type=float, default=0.1,
+                           help='Lambda anti-LM.')
+        agent.add_argument('-maxl', '--max-len', type=int, default=5,
+                           help='Max len anti-LM.')
+        agent.add_argument('-gam', '--gamma', type=float, default=0.1,
+                           help='Size of beam search.')
 
         Seq2seqAgent.dictionary_class().add_cmdline_args(argparser)
         return agent
@@ -158,6 +165,7 @@ class Seq2seqAgent(Agent):
         self.history = {}
         self.report_freq = opt['report_freq']
         self.beam_size = opt['beam_size']
+        self.sf = SmoothingFunction()
         states = {}
 
         # check for cuda
@@ -404,6 +412,8 @@ class Seq2seqAgent(Agent):
         self.metrics['num_tokens'] = 0.0
         self.metrics['1_gram'] = Counter()
         self.metrics['2_gram'] = Counter()
+        self.refs = []
+        self.hypos = []
 
     def report(self):
         m = {}
@@ -412,6 +422,7 @@ class Seq2seqAgent(Agent):
             m['ppl'] = math.exp(m['loss'])
             m['d_1'] = len(self.metrics['1_gram']) / self.metrics['num_tokens']
             m['d_2'] = len(self.metrics['2_gram']) / self.metrics['num_tokens']
+            m['BLEU'] = corpus_bleu(self.refs, self.hypos, smoothing_function=self.sf.method5)
         for k, v in m.items():
             # clean up: rounds to sigfigs and converts tensors to floats
             m[k] = round_sigfigs(v, 4)
@@ -482,6 +493,7 @@ class Seq2seqAgent(Agent):
             self.update_params()
         else:
             self.model.eval()
+            xs.volatile, ys.volatile = True, True
             out = self.model(xs, ys=None, cands=cands, valid_cands=valid_cands, beam_size=self.beam_size, reverse_model=self.reverse_model) # pass the reverse model here
             predictions, text_cand_inds = out[0], out[2]
 
@@ -593,6 +605,25 @@ class Seq2seqAgent(Agent):
             predictions.cpu().data, valid_inds, batch_reply, observations,
             self.dict, self.END_IDX, report_freq=report_freq, labels=labels,
             answers=self.answers, ys=ys.data if ys is not None else None)
+
+        # tensor to list
+        list_ref = ys.cpu().data.numpy().tolist()
+        list_hypo = predictions.cpu().data.numpy().tolist()
+
+        # cut off from self.END_IDX
+        for ref in list_ref:
+            try:
+                ind = ref.index(self.END_IDX)
+            except ValueError:
+                ind = len(ref)
+            self.refs.append([ref[:ind]])
+
+        for hypo in list_hypo:
+            try:
+                ind = hypo.index(self.END_IDX)
+            except ValueError:
+                ind = len(hypo)
+            self.hypos.append(hypo[:ind])
 
         if text_cand_inds is not None:
             text_cand_inds = text_cand_inds.cpu().data
