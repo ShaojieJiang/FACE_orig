@@ -142,6 +142,8 @@ class Seq2seqAgent(Agent):
                                 'so they are not updated during training.')
         agent.add_argument('-rf', '--report-freq', type=float, default=0.001,
                            help='Report frequency of prediction during eval.')
+        agent.add_argument('-decay', '--decay-factor', type=float, default=0.9,
+                           help='Decay factor for token frequency.')
 
         Seq2seqAgent.dictionary_class().add_cmdline_args(argparser)
         return agent
@@ -453,7 +455,7 @@ class Seq2seqAgent(Agent):
         for pred in predictions.cpu().data.numpy():
             curr.update(pred)
 
-        self.word_freq *= 0.9 # here the decaying factor should be a hyper-parameter
+        self.word_freq *= self.opt['decay_factor']
         for k, v in curr.most_common():
             self.word_freq[k] += v
         
