@@ -53,13 +53,6 @@ class Seq2seq(nn.Module):
             self.ranker = Ranker(self.decoder, padding_idx=self.NULL_IDX,
                                  attn_type=opt['attention'])
 
-    def index_score(self, lm_scores, preds):
-        size = preds.size()
-        dict_size = lm_scores.size(1)
-        offset = torch.arange(0, size[0]).unsqueeze(-1)[:, [0 for _ in range(size[1])]].long().cuda() * dict_size
-        inds = preds + Variable(offset)
-
-        return lm_scores.view(-1, 1)[inds.view(-1)].view(preds.size()).log_()
     def best_response(self, xs, N_best_resp, N_best_score, beam_response, beam_score, reverse_model):
         bsz = len(N_best_score)
         start = Variable(self.START, requires_grad=False)
@@ -67,10 +60,8 @@ class Seq2seq(nn.Module):
         xs = torch.cat([starts, xs], 1)
 
         lambda_bidi = self.opt['lambda']
-        max_len_bidi = self.opt['max_len']
         gamma_bidi = self.opt['gamma']
-        # if i > max_len_bidi:
-        #     lambda_bidi = 0
+        import pdb; pdb.set_trace()
         # use reverse model here for calculating p(s|t)
         for i in range(bsz):
             if not N_best_score[i]:
@@ -164,20 +155,15 @@ class Seq2seq(nn.Module):
                 parents = parents.view(-1, 1, parents.size(2))[trim_mask.view(-1), :, :].view(bsz, beam_size, -1) # update previous predictions
                 last_pred = parents[:, :, -1]
                 new_hidden = []
-                new_lm_hidden = []
                 for j in range(beam_size): # for each beam-parent
                     # use last_pred as input
                     if type(hidden) is tuple:
                         _, _, _, h = self.decoder(last_pred[:, j], hidden, enc_out, attn_mask, beam_size)
-                        _, lm_h = self.decoder.lm_score(last_pred[:, j].unsqueeze(-1), lm_hidden)
                     else:
                         _, _, _, h = self.decoder(last_pred[:, j], hidden[j], enc_out, attn_mask, beam_size)
-                        _, lm_h = self.decoder.lm_score(last_pred[:, j].unsqueeze(-1), lm_hidden[j])
                     new_hidden.append(h)
-                    new_lm_hidden.append(lm_h)
                     # save the hidden states for later use
                 hidden = new_hidden
-                lm_hidden = new_lm_hidden
                 offset *= beam_size
                 preds = beam_ind.view(-1)[Variable(y.data+offset).view(-1)].view(-1, beam_size)
                 parents = torch.cat((parents, preds.unsqueeze(-1)), 2)

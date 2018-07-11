@@ -146,8 +146,6 @@ class Seq2seqAgent(Agent):
                            help='Size of beam search.')
         agent.add_argument('-lam', '--lambda', type=float, default=0.1,
                            help='Lambda anti-LM.')
-        agent.add_argument('-maxl', '--max-len', type=int, default=5,
-                           help='Max len anti-LM.')
         agent.add_argument('-gam', '--gamma', type=float, default=0.1,
                            help='Size of beam search.')
 
