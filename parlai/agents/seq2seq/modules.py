@@ -53,6 +53,26 @@ class Seq2seq(nn.Module):
             self.ranker = Ranker(self.decoder, padding_idx=self.NULL_IDX,
                                  attn_type=opt['attention'])
 
+    def reverse_score(self, xs, ys, bsz):
+        if type(ys) == Variable:
+            _, hidden = self.encoder(ys)
+            return self.decoder.gt_score(xs.expand(len(ys), len(xs)), hidden)
+        else:
+            start = 0
+            stop = bsz
+            scores = []
+
+            while start < len(ys):
+                current = ys[start:stop]
+                max_len = max([len(y) for y in current])
+                padded = [y if len(y) == max_len else y + [self.NULL_IDX for i in range(max_len - len(y))] for y in current]
+                padded = Variable(torch.LongTensor(padded).cuda(), volatile=True)
+                _, hidden = self.encoder(padded)
+                scores.append(self.decoder.gt_score(xs.expand(len(padded), len(xs)), hidden))
+                start += bsz
+                stop += bsz
+            return torch.cat(scores, 0).data.cpu().numpy()
+
     def best_response(self, xs, N_best_resp, N_best_score, beam_response, beam_score, reverse_model):
         bsz = len(N_best_score)
         start = Variable(self.START, requires_grad=False)
@@ -61,42 +81,32 @@ class Seq2seq(nn.Module):
 
         lambda_bidi = self.opt['lambda']
         gamma_bidi = self.opt['gamma']
-        import pdb; pdb.set_trace()
-        # use reverse model here for calculating p(s|t)
         for i in range(bsz):
             if not N_best_score[i]:
                 continue
-            for j in range(len(N_best_resp[i])):
-                ys = Variable(torch.LongTensor(N_best_resp[i][j])).cuda()
-                _, hidden = reverse_model.encoder(ys.view(1, -1))
-                reverse_score = reverse_model.decoder.reverse_score(xs[i, :].view(1, -1), hidden)
-                N_best_score[i][j] += lambda_bidi * reverse_score.data[0] + gamma_bidi * ys.size(0)
+            reverse_score = reverse_model.reverse_score(xs[i, :], N_best_resp[i], bsz) # use reverse model here for calculating p(s|t)
+            resp_len = [len(y) for y in N_best_resp[i]]
+            final_score = np.array(N_best_score[i]) + lambda_bidi * reverse_score + gamma_bidi * np.array(resp_len)
+            max_ind = np.argmax(final_score)
+            N_best_resp[i] = N_best_resp[i][max_ind]
+            N_best_score[i] = final_score[i]
 
         for i in range(bsz):
-            for j in range(beam_score.size(1)):
-                ys = beam_response[i, j, :]
-                _, hidden = reverse_model.encoder(ys.view(1, -1))
-                reverse_score = reverse_model.decoder.reverse_score(xs[i, :].view(1, -1), hidden)
-                beam_score[i, j] = beam_score[i, j] + lambda_bidi * reverse_score.data[0] + gamma_bidi * ys.size(0)
-
+            reverse_score = reverse_model.reverse_score(xs[i, :], beam_response[i, :, :], bsz)
+            resp_len = beam_response.size(2)
+            beam_score[i, :] = beam_score[i, :] + lambda_bidi * reverse_score + gamma_bidi * resp_len
 
         max_score, max_ind = beam_score.max(dim=1)
         max_score = max_score.data.cpu().numpy().tolist()
         max_ind = max_ind.data.cpu().numpy().tolist()
         max_len=0
         for i in range(bsz): # keep the 1-best for all
-            if N_best_score[i]:
-                max_id = np.argmax(N_best_score[i])
-                if N_best_score[i][max_id] > max_score[i]:
-                    N_best_resp[i] = N_best_resp[i][max_id]
-                else:
-                    N_best_resp[i] = beam_response[i, max_ind[i], :].data.cpu().numpy().tolist()
-            else:
+            if not N_best_score[i] or N_best_score[i] < max_score[i]:
                 N_best_resp[i] = beam_response[i, max_ind[i], :].data.cpu().numpy().tolist()
             if max_len < len(N_best_resp[i]):
                 max_len = len(N_best_resp[i])
         paded_resp = [x if len(x) == max_len else x + [self.END_IDX for _ in range(max_len-len(x))] for x in N_best_resp]
-        return Variable(torch.LongTensor(paded_resp).cuda())
+        return Variable(torch.LongTensor(paded_resp).cuda(), volatile=True)
     
     def beam_search(self, xs, ys, hidden, enc_out, attn_mask, beam_size, reverse_model):
         bsz = len(ys)
@@ -282,6 +292,7 @@ class Encoder(nn.Module):
             packed = True
         except ValueError:
             # packing failed, don't pack then
+            packed = False
             pass
 
         zeros = self.zeros(xs)
@@ -351,16 +362,17 @@ class Decoder(nn.Module):
                                         attn_length=attn_length,
                                         attn_time=attn_time)
 
-    def reverse_score(self, xs, hidden): # score of reverse model: p(s|t)
+    def gt_score(self, xs, hidden): # get the score given ground truth
         xes = self.lt(xs)
         output, new_hidden = self.rnn(xes, hidden)
         e = self.o2e(output)
         scores = self.e2s(e)
         scores = F.softmax(scores, dim=2)
-        inds = xs.cpu().data.numpy().tolist()[0][1:]
+        scores.log_()
+        inds = xs[0, :].data.cpu().numpy().tolist()
         log_score = 0
-        for i, ind in enumerate(inds):
-            log_score += scores[:, i, ind].log()
+        for i in range(len(inds) - 1):
+            log_score += scores[:, i, inds[i+1]]
 
         return log_score
     
