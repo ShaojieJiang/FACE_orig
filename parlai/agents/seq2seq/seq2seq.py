@@ -22,6 +22,7 @@ from nltk.translate.bleu_score import sentence_bleu, corpus_bleu, SmoothingFunct
 import os
 import math
 import random
+import copy
 
 
 class Seq2seqAgent(Agent):
@@ -240,9 +241,10 @@ class Seq2seqAgent(Agent):
                 longest_label=states.get('longest_label', 1))
 
             # deep copy
-            # opt['attention'] = 'none'
+            reverse_opt = copy.deepcopy(opt)
+            reverse_opt['attention'] = 'none'
             self.reverse_model = self.model_class(
-                opt, len(self.dict), padding_idx=self.NULL_IDX,
+                reverse_opt, len(self.dict), padding_idx=self.NULL_IDX,
                 start_idx=self.START_IDX, end_idx=self.END_IDX,
                 longest_label=reverse_states.get('longest_label', 1))
 
@@ -663,8 +665,8 @@ class Seq2seqAgent(Agent):
     def load(self, path):
         """Return opt and model states."""
         states = torch.load(path, map_location=lambda cpu, _: cpu)
-        reverse_path = path # + '.reverse' # file path for reverse model
-        reverse_states = torch.load(path, map_location=lambda cpu, _: cpu)
+        reverse_path = path + '_reverse' # file path for reverse model
+        reverse_states = torch.load(reverse_path, map_location=lambda cpu, _: cpu)
         return states['opt'], states, reverse_states
 
     def receive_metrics(self, metrics_dict):
