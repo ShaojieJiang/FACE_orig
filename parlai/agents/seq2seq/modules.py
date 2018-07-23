@@ -81,6 +81,7 @@ class Seq2seq(nn.Module):
 
         lambda_bidi = self.opt['lambda']
         gamma_bidi = self.opt['gamma']
+        max_len = 0
         for i in range(bsz):
             if not N_best_score[i]:
                 continue
@@ -89,24 +90,26 @@ class Seq2seq(nn.Module):
             final_score = np.array(N_best_score[i]) + lambda_bidi * reverse_score + gamma_bidi * np.array(resp_len)
             max_ind = np.argmax(final_score)
             N_best_resp[i] = N_best_resp[i][max_ind]
-            N_best_score[i] = final_score[i]
+            # N_best_score[i] = final_score[max_ind]
+            if max_len < resp_len[max_ind]:
+                max_len = resp_len[max_ind]
 
-        for i in range(bsz):
-            reverse_score = reverse_model.reverse_score(xs[i, :], beam_response[i, :, :], bsz)
-            resp_len = beam_response.size(2)
-            beam_score[i, :] = beam_score[i, :] + lambda_bidi * reverse_score + gamma_bidi * resp_len
+        # for i in range(bsz):
+        #     reverse_score = reverse_model.reverse_score(xs[i, :], beam_response[i, :, :], bsz)
+        #     resp_len = beam_response.size(2)
+        #     beam_score[i, :] = beam_score[i, :] + lambda_bidi * reverse_score + gamma_bidi * resp_len
 
-        max_score, max_ind = beam_score.max(dim=1)
-        max_score = max_score.data.cpu().numpy().tolist()
-        max_ind = max_ind.data.cpu().numpy().tolist()
-        max_len=0
-        for i in range(bsz): # keep the 1-best for all
-            if not N_best_score[i] or N_best_score[i] < max_score[i]:
-                N_best_resp[i] = beam_response[i, max_ind[i], :].data.cpu().numpy().tolist()
-            if max_len < len(N_best_resp[i]):
-                max_len = len(N_best_resp[i])
-        paded_resp = [x if len(x) == max_len else x + [self.END_IDX for _ in range(max_len-len(x))] for x in N_best_resp]
-        return Variable(torch.LongTensor(paded_resp).cuda(), volatile=True)
+        # max_score, max_ind = beam_score.max(dim=1)
+        # max_score = max_score.data.cpu().numpy().tolist()
+        # max_ind = max_ind.data.cpu().numpy().tolist()
+        # max_len=0
+        # for i in range(bsz): # keep the 1-best for all
+        #     if not N_best_score[i] or N_best_score[i] < max_score[i]:
+        #         N_best_resp[i] = beam_response[i, max_ind[i], :].data.cpu().numpy().tolist()
+        #     if max_len < len(N_best_resp[i]):
+        #         max_len = len(N_best_resp[i])
+        padded_resp = [x if len(x) == max_len else x + [self.END_IDX for _ in range(max_len-len(x))] for x in N_best_resp]
+        return Variable(torch.LongTensor(padded_resp).cuda(), volatile=True)
     
     def beam_search(self, xs, ys, hidden, enc_out, attn_mask, beam_size, reverse_model):
         bsz = len(ys)
