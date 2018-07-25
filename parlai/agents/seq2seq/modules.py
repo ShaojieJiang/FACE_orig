@@ -87,7 +87,7 @@ class Seq2seq(nn.Module):
                 continue
             reverse_score = reverse_model.reverse_score(xs[i, :], N_best_resp[i], bsz) # use reverse model here for calculating p(s|t)
             resp_len = [len(y) for y in N_best_resp[i]]
-            final_score = np.array(N_best_score[i]) + lambda_bidi * reverse_score + gamma_bidi * np.array(resp_len)
+            final_score = (1 - lambda_bidi) * np.array(N_best_score[i]) + lambda_bidi * reverse_score + gamma_bidi * np.array(resp_len)
             max_ind = np.argmax(final_score)
             N_best_resp[i] = N_best_resp[i][max_ind]
             # N_best_score[i] = final_score[max_ind]
