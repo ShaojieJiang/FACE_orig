@@ -279,7 +279,7 @@ class TrainLoop():
         world = self.world
         if opt.get('model_file'):
             self.agent = create_agent(opt)
-        rep, wrld = run_eval(self.agent, opt, 'test', write_log=True)
+        rep, wrld = run_eval(self.agent, opt, opt['datatype'], write_log=True)
         wrld.shutdown()  # may need to shut down threads, remote connections
         return rep
 
