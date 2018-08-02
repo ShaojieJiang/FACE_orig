@@ -475,6 +475,14 @@ class AttentionLayer(nn.Module):
                  attn_length=-1, attn_time='pre'):
         super().__init__()
         self.attention = attn_type
+        attn_heads = 5
+        # self.wq = Variable(torch.rand((attn_heads, hidden_size)), requires_grad=True).cuda()
+        self.wq = nn.Linear(hidden_size, attn_heads, bias=False)
+        wp = []
+        for i in range(attn_heads):
+            # self.wp.append(Variable(torch.rand((hidden_size, hidden_size)), requires_grad=True).cuda())
+            wp.append(nn.Linear(hidden_size, hidden_size, bias=False))
+        self.wp = nn.ModuleList(wp)
 
         if self.attention != 'none':
             hsz = hidden_size
@@ -506,6 +514,10 @@ class AttentionLayer(nn.Module):
                 self.attn = nn.Linear(hsz, hszXdirs, bias=False)
 
     def forward(self, xes, hidden, enc_out, attn_mask=None):
+        bsz = len(enc_out)
+        mh = []
+        for wp in self.wp:
+            mh.append(wp(enc_out)) # project enc_out
         if self.attention == 'none':
             return xes
 
@@ -539,15 +551,20 @@ class AttentionLayer(nn.Module):
                     torch.bmm(hid, enc_out.transpose(1, 2)).squeeze(1))
             elif self.attention == 'general':
                 hid = self.attn(hid)
-                attn_w_premask = (
-                    torch.bmm(hid, enc_out.transpose(1, 2)).squeeze(1))
-            # calculate activation scores
-            if attn_mask is not None:
-                # remove activation from NULL symbols
-                attn_w_premask -= (1 - attn_mask) * 1e20
-            attn_weights = F.softmax(attn_w_premask, dim=1)
-
-        attn_applied = torch.bmm(attn_weights.unsqueeze(1), enc_out)
+                head_weight = self.wq(enc_out[:, -1, :])
+                head_weight = F.softmax(head_weight, dim=1)
+                attn_applied = []
+                for head in mh:
+                    attn_w_premask = torch.bmm(hid, head.transpose(1, 2))
+                    # calculate activation scores
+                    if attn_mask is not None:
+                        # remove activation from NULL symbols
+                        attn_w_premask -= (1 - attn_mask.unsqueeze(1)) * 1e20
+                    attn_weight = F.softmax(attn_w_premask, dim=2)
+                    attn_applied.append(torch.bmm(attn_weight, head))
+                attn_applied = torch.cat(attn_applied, dim=1)
+                attn_applied = torch.bmm(head_weight.unsqueeze(1), attn_applied).squeeze(1)
+                        
         merged = torch.cat((xes.squeeze(1), attn_applied.squeeze(1)), 1)
         output = F.tanh(self.attn_combine(merged).unsqueeze(1))
 
