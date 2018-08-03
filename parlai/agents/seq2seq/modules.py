@@ -95,20 +95,30 @@ class Seq2seq(nn.Module):
                 predictions.append(preds)
                 scores.append(score)
             else:
+                mh_weights = []
                 for i in range(ys.size(1)):
                     xi = xs.select(1, i)
-                    preds, score, hidden = self.decoder(xi, hidden, enc_out, attn_mask)
+                    preds, score, hidden, attn_weights = self.decoder(xi, hidden, enc_out, attn_mask)
+                    mh_weights.append(torch.cat(attn_weights, dim=1).unsqueeze(3))
                     predictions.append(preds)
                     scores.append(score)
+                seq_len = len(mh_weights)
+                mh_weights = torch.cat(mh_weights, 3)
+                mh_weights = mh_weights.sum(dim=3) / seq_len
+                delta = torch.bmm(mh_weights, mh_weights.transpose(1, 2))
+                attn_heads = delta.size(1)
+                eye = Variable(torch.eye(attn_heads).cuda())
+                delta = delta - eye.expand(bsz, -1, -1)
         else:
             # just predict
             done = [False for _ in range(bsz)]
             total_done = 0
             xs = starts
+            delta = None
 
             for _ in range(self.longest_label):
                 # generate at most longest_label tokens
-                preds, score, hidden = self.decoder(xs, hidden, enc_out, attn_mask)
+                preds, score, hidden, _ = self.decoder(xs, hidden, enc_out, attn_mask)
                 scores.append(score)
                 xs = preds
                 predictions.append(preds)
@@ -129,7 +139,7 @@ class Seq2seq(nn.Module):
             predictions = torch.cat(predictions, 1)
         if scores:
             scores = torch.cat(scores, 1)
-        return predictions, scores, text_cand_inds, encoder_states
+        return predictions, scores, text_cand_inds, encoder_states, delta
 
 
 class Encoder(nn.Module):
@@ -259,7 +269,7 @@ class Decoder(nn.Module):
             xes.unsqueeze_(1)
         output, new_hidden = self.rnn(xes, hidden)
         if self.attn_time == 'post':
-            output = self.attention(output, new_hidden, encoder_output, attn_mask)
+            output, attn_weights = self.attention(output, new_hidden, encoder_output, attn_mask)
 
         e = self.o2e(output)
         scores = F.dropout(self.e2s(e), p=self.dropout, training=self.training)
@@ -275,7 +285,7 @@ class Decoder(nn.Module):
             _max_scores, idx = (soft_scores.narrow(2, 1, soft_scores.size(2) - 1) * mask.unsqueeze(1)).max(2)
         preds = idx.add_(1)
 
-        return preds, scores, new_hidden
+        return preds, scores, new_hidden, attn_weights
 
 
 class Ranker(object):
@@ -553,6 +563,7 @@ class AttentionLayer(nn.Module):
                 hid = self.attn(hid)
                 head_weight = self.wq(enc_out[:, -1, :])
                 head_weight = F.softmax(head_weight, dim=1)
+                attn_weights = []
                 attn_applied = []
                 for head in mh:
                     attn_w_premask = torch.bmm(hid, head.transpose(1, 2))
@@ -561,6 +572,7 @@ class AttentionLayer(nn.Module):
                         # remove activation from NULL symbols
                         attn_w_premask -= (1 - attn_mask.unsqueeze(1)) * 1e20
                     attn_weight = F.softmax(attn_w_premask, dim=2)
+                    attn_weights.append(attn_weight)
                     attn_applied.append(torch.bmm(attn_weight, head))
                 attn_applied = torch.cat(attn_applied, dim=1)
                 attn_applied = torch.bmm(head_weight.unsqueeze(1), attn_applied).squeeze(1)
@@ -568,4 +580,4 @@ class AttentionLayer(nn.Module):
         merged = torch.cat((xes.squeeze(1), attn_applied.squeeze(1)), 1)
         output = F.tanh(self.attn_combine(merged).unsqueeze(1))
 
-        return output
+        return output, attn_weights

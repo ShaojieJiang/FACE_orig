@@ -75,7 +75,7 @@ class Seq2seqAgent(Agent):
                            default=False,
                            help='whether to encode the context with a '
                                 'bidirectional rnn')
-        agent.add_argument('-att', '--attention', default='none',
+        agent.add_argument('-att', '--attention', default='general',
                            choices=['none', 'concat', 'general', 'dot', 'local'],
                            help='Choices: none, concat, general, local. '
                                 'If set local, also set attention-length. '
@@ -462,6 +462,10 @@ class Seq2seqAgent(Agent):
             out = self.model(xs, ys)
             predictions, scores = out[0], out[1]
             loss = self.criterion(scores.view(-1, scores.size(-1)), ys.view(-1))
+            delta = out[-1]
+            bsz = len(xs)
+            penalty = torch.norm(delta.view(bsz, -1), dim=1) ** 2
+            loss = 0.95 * loss + 0.05 * penalty.sum()
             # save loss to metrics
             target_tokens = ys.ne(self.NULL_IDX).long().sum().data[0]
             self.metrics['loss'] += loss.double().data[0]
