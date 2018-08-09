@@ -292,7 +292,8 @@ class Seq2seqAgent(Agent):
 
             # set up criteria
             self.criterion = nn.CrossEntropyLoss(ignore_index=self.NULL_IDX,
-                                                 size_average=False)
+                                                 size_average=False,
+                                                 reduce=False)
 
             if self.use_cuda:
                 # push to cuda
@@ -464,13 +465,6 @@ class Seq2seqAgent(Agent):
         for k, v in curr.most_common():
             self.word_freq[k] += v
         
-    def loss_weight(self):
-        RF = self.word_freq / self.word_freq.sum() # relative frequency
-        k = -1 / RF.max()
-        weight = k * RF + 1
-        weight = weight / weight.sum() * weight.size(0) # normalization
-        return weight
-        
     def predict(self, xs, ys=None, cands=None, valid_cands=None, is_training=False):
         """Produce a prediction from our model.
 
@@ -486,8 +480,12 @@ class Seq2seqAgent(Agent):
             out = self.model(xs, ys)
             predictions, scores = out[0], out[1]
             self.update_frequency(predictions)
-            self.criterion.weight = self.loss_weight()
             loss = self.criterion(scores.view(-1, scores.size(-1)), ys.view(-1))
+            freq_pred = Variable(self.word_freq[predictions.cpu().data.view(1, -1).numpy().tolist()[0]])
+            freq_GT = Variable(self.word_freq[ys.cpu().data.view(1, -1).numpy().tolist()[0]])
+            total_freq = self.word_freq.sum()
+            weight = 1 + F.relu(freq_pred - freq_GT) / total_freq
+            loss = torch.matmul(loss, weight)
             # save loss to metrics
             target_tokens = ys.ne(self.NULL_IDX).long().sum().data[0]
             self.metrics['loss'] += loss.double().data[0]
