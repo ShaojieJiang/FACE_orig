@@ -489,7 +489,6 @@ class Seq2seqAgent(Agent):
                 self.update_frequency(ys)
             else:
                 self.update_frequency(predictions)
-            self.criterion.weight = self.loss_weight()
             loss = self.criterion(scores.view(-1, scores.size(-1)), ys.view(-1))
             freq_pred = Variable(self.word_freq[predictions.cpu().data.view(1, -1).numpy().tolist()[0]])
             freq_GT = Variable(self.word_freq[ys.cpu().data.view(1, -1).numpy().tolist()[0]])
