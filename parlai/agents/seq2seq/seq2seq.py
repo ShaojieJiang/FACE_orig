@@ -145,6 +145,8 @@ class Seq2seqAgent(Agent):
                            help='Report frequency of prediction during eval.')
         agent.add_argument('-decay', '--decay-factor', type=float, default=0.9,
                            help='Decay factor for token frequency.')
+        agent.add_argument('-gt', '--ground-truth', type=bool, default=False,
+                           help='Whether to use ground truth for calculating token frequency.')
 
         Seq2seqAgent.dictionary_class().add_cmdline_args(argparser)
         return agent
@@ -457,8 +459,12 @@ class Seq2seqAgent(Agent):
 
     def update_frequency(self, predictions):
         curr = Counter()
-        for pred in predictions.cpu().data.numpy():
-            curr.update(pred)
+        for pred in predictions.cpu().data.numpy().tolist():
+            if self.END_IDX in pred:
+                ind = pred.index(self.END_IDX) + 1
+                curr.update(pred[:ind])
+            else:
+                curr.update(pred)
 
         self.word_freq *= self.opt['decay_factor']
         for k, v in curr.most_common():
@@ -485,7 +491,10 @@ class Seq2seqAgent(Agent):
             self.zero_grad()
             out = self.model(xs, ys)
             predictions, scores = out[0], out[1]
-            self.update_frequency(predictions)
+            if self.opt['ground_truth']:
+                self.update_frequency(ys)
+            else:
+                self.update_frequency(predictions)
             self.criterion.weight = self.loss_weight()
             loss = self.criterion(scores.view(-1, scores.size(-1)), ys.view(-1))
             # save loss to metrics
