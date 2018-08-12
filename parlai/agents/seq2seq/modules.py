@@ -63,19 +63,20 @@ class Seq2seq(nn.Module):
     def best_response(self, N_best_resp, N_best_score, beam_response, beam_score):
         bsz = len(N_best_score)
 
-        max_score, max_ind = beam_score.max(dim=1)
-        max_score = max_score.data.cpu().numpy().tolist()
-        max_ind = max_ind.data.cpu().numpy().tolist()
+        # max_score, max_ind = beam_score.max(dim=1)
+        # max_score = max_score.data.cpu().numpy().tolist()
+        # max_ind = max_ind.data.cpu().numpy().tolist()
         max_len = 0
         for i in range(bsz): # keep the 1-best for all
             if N_best_score[i]:
                 max_id = np.argmax(N_best_score[i])
-                if N_best_score[i][max_id] > max_score[i]:
-                    N_best_resp[i] = N_best_resp[i][max_id]
-                else:
-                    N_best_resp[i] = beam_response[i, max_ind[i], :].data.cpu().numpy().tolist()
-            else:
-                N_best_resp[i] = beam_response[i, max_ind[i], :].data.cpu().numpy().tolist()
+                N_best_resp[i] = N_best_resp[i][max_id]
+                # if N_best_score[i][max_id] > max_score[i]:
+                #     N_best_resp[i] = N_best_resp[i][max_id]
+                # else:
+                #     N_best_resp[i] = beam_response[i, max_ind[i], :].data.cpu().numpy().tolist()
+            # else:
+            #     N_best_resp[i] = beam_response[i, max_ind[i], :].data.cpu().numpy().tolist()
             if max_len < len(N_best_resp[i]):
                 max_len = len(N_best_resp[i])
         paded_resp = [x if len(x) == max_len else x + [self.END_IDX for _ in range(max_len-len(x))] for x in N_best_resp]
