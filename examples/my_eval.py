@@ -20,11 +20,9 @@ python examples/train_model.py -m seq2seq -t babi:Task10k:1 -mf '/tmp/model' -bs
 python examples/train_model.py -m drqa -t babi:Task10k:1 -mf /tmp/model -bs 10
 """
 
-import sys
 from parlai.scripts.train_model import TrainLoop, setup_args
 
 if __name__ == '__main__':
     parser = setup_args()
     opt = parser.parse_args()
-    res = TrainLoop(opt).run_test()
-    sys.exit(res['BLEU'])
+    TrainLoop(opt).run_test()
