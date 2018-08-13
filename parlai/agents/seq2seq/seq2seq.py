@@ -147,6 +147,8 @@ class Seq2seqAgent(Agent):
                            help='Decay factor for token frequency.')
         agent.add_argument('-gt', '--ground-truth', type=bool, default=False,
                            help='Whether to use ground truth for calculating token frequency.')
+        agent.add_argument('-cp', '--confidence-penalty', type=float, default=0.01,
+                           help='Weight for confidence penalty.')
 
         Seq2seqAgent.dictionary_class().add_cmdline_args(argparser)
         return agent
@@ -162,6 +164,7 @@ class Seq2seqAgent(Agent):
         self.history = {}
         self.report_freq = opt['report_freq']
         self.sf = SmoothingFunction()
+        self.cp = opt['confidence_penalty']
         states = {}
 
         # check for cuda
@@ -293,7 +296,7 @@ class Seq2seqAgent(Agent):
                 self.cands = torch.LongTensor(1, 1, 1)
 
             # set up criteria
-            self.criterion = nn.CrossEntropyLoss(ignore_index=self.NULL_IDX,
+            self.criterion = nn.NLLLoss(ignore_index=self.NULL_IDX,
                                                  size_average=False)
 
             if self.use_cuda:
@@ -495,8 +498,13 @@ class Seq2seqAgent(Agent):
                 self.update_frequency(ys)
             else:
                 self.update_frequency(predictions)
+            log_scores = scores.log()
+            entropy = -torch.bmm(scores.view(-1, 1, scores.size(-1)), log_scores.view(-1, scores.size(-1), 1)).view(-1)
+            mask = ys.view(-1) != self.NULL_IDX
+            entropy = torch.matmul(entropy, mask.float()) # exclude null token
             self.criterion.weight = self.loss_weight()
-            loss = self.criterion(scores.view(-1, scores.size(-1)), ys.view(-1))
+            loss = self.criterion(log_scores.view(-1, log_scores.size(-1)), ys.view(-1))
+            loss -= self.cp * entropy
             # save loss to metrics
             target_tokens = ys.ne(self.NULL_IDX).long().sum().data[0]
             self.metrics['loss'] += loss.double().data[0]
