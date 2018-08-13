@@ -281,7 +281,6 @@ class TrainLoop():
             self.agent = create_agent(opt)
         rep, wrld = run_eval(self.agent, opt, opt['datatype'], write_log=True)
         wrld.shutdown()  # may need to shut down threads, remote connections
-        return rep
 
 if __name__ == '__main__':
     TrainLoop(setup_args().parse_args()).train()
