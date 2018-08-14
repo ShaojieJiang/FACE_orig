@@ -391,6 +391,7 @@ class Seq2seqAgent(Agent):
         self.metrics['num_tokens'] = 0.0
         self.metrics['1_gram'] = Counter()
         self.metrics['2_gram'] = Counter()
+        self.metrics['out_tokens'] = 0.0
         self.refs = []
         self.hypos = []
 
@@ -399,8 +400,8 @@ class Seq2seqAgent(Agent):
         if self.metrics['num_tokens'] > 0:
             m['loss'] = self.metrics['loss'] / self.metrics['num_tokens']
             m['ppl'] = math.exp(m['loss'])
-            m['d_1'] = len(self.metrics['1_gram']) / self.metrics['num_tokens']
-            m['d_2'] = len(self.metrics['2_gram']) / self.metrics['num_tokens']
+            m['d_1'] = len(self.metrics['1_gram']) / self.metrics['out_tokens']
+            m['d_2'] = len(self.metrics['2_gram']) / self.metrics['out_tokens']
             m['BLEU'] = corpus_bleu(self.refs, self.hypos, smoothing_function=self.sf.method5)
         for k, v in m.items():
             # clean up: rounds to sigfigs and converts tensors to floats
@@ -559,6 +560,7 @@ class Seq2seqAgent(Agent):
         sentences = predictions.cpu().data.numpy().tolist()
         for sent in sentences:
             end = self.end_idx(sent)
+            self.metrics['out_tokens'] += end # total number of tokens generated
             self.metrics['1_gram'].update(sent[:end])
             self.metrics['2_gram'].update(ngrams(sent[:end], 2))
         
