@@ -391,6 +391,7 @@ class Seq2seqAgent(Agent):
         self.metrics['num_tokens'] = 0.0
         self.metrics['1_gram'] = Counter()
         self.metrics['2_gram'] = Counter()
+        self.metrics['out_tokens'] = 0.0
         self.refs = []
         self.hypos = []
 
@@ -399,8 +400,8 @@ class Seq2seqAgent(Agent):
         if self.metrics['num_tokens'] > 0:
             m['loss'] = self.metrics['loss'] / self.metrics['num_tokens']
             m['ppl'] = math.exp(m['loss'])
-            m['d_1'] = len(self.metrics['1_gram']) / self.metrics['num_tokens']
-            m['d_2'] = len(self.metrics['2_gram']) / self.metrics['num_tokens']
+            m['d_1'] = len(self.metrics['1_gram']) / self.metrics['out_tokens']
+            m['d_2'] = len(self.metrics['2_gram']) / self.metrics['out_tokens']
             m['BLEU'] = corpus_bleu(self.refs, self.hypos, smoothing_function=self.sf.method5)
         for k, v in m.items():
             # clean up: rounds to sigfigs and converts tensors to floats
@@ -553,11 +554,19 @@ class Seq2seqAgent(Agent):
 
         return xs, ys, labels, valid_inds, cands, valid_cands, is_training
 
+    def end_idx(self, sent):
+        if self.END_IDX in sent:
+            return sent.index(self.END_IDX)
+        else:
+            return len(sent)
+        
     def distinct_ngrams(self, predictions):
         sentences = predictions.cpu().data.numpy().tolist()
         for sent in sentences:
-            self.metrics['1_gram'].update(sent)
-            self.metrics['2_gram'].update(ngrams(sent, 2))
+            end = self.end_idx(sent)
+            self.metrics['out_tokens'] += end # total number of tokens generated
+            self.metrics['1_gram'].update(sent[:end])
+            self.metrics['2_gram'].update(ngrams(sent[:end], 2))
         
     def batch_act(self, observations):
         batchsize = len(observations)
@@ -593,17 +602,11 @@ class Seq2seqAgent(Agent):
 
         # cut off from self.END_IDX
         for ref in list_ref:
-            try:
-                ind = ref.index(self.END_IDX)
-            except ValueError:
-                ind = len(ref)
+            ind = self.end_idx(ref)
             self.refs.append([ref[:ind]])
 
         for hypo in list_hypo:
-            try:
-                ind = hypo.index(self.END_IDX)
-            except ValueError:
-                ind = len(hypo)
+            ind = self.end_idx(hypo)
             self.hypos.append(hypo[:ind])
 
         if text_cand_inds is not None:
