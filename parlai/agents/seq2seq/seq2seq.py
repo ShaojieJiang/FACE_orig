@@ -461,11 +461,8 @@ class Seq2seqAgent(Agent):
     def update_frequency(self, predictions):
         curr = Counter()
         for pred in predictions.cpu().data.numpy().tolist():
-            if self.END_IDX in pred:
-                ind = pred.index(self.END_IDX) + 1
-                curr.update(pred[:ind])
-            else:
-                curr.update(pred)
+            ind = self.end_idx(pred) + 1
+            curr.update(pred[:ind])
 
         self.word_freq *= self.opt['decay_factor']
         for k, v in curr.most_common():
