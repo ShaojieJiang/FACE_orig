@@ -142,8 +142,6 @@ class Seq2seqAgent(Agent):
                                 'so they are not updated during training.')
         agent.add_argument('-rf', '--report-freq', type=float, default=0.001,
                            help='Report frequency of prediction during eval.')
-        agent.add_argument('-cp', '--confidence-penalty', type=float, default=2.5,
-                           help='Weight for confidence penalty.')
 
         Seq2seqAgent.dictionary_class().add_cmdline_args(argparser)
         return agent
@@ -159,7 +157,6 @@ class Seq2seqAgent(Agent):
         self.history = {}
         self.report_freq = opt['report_freq']
         self.sf = SmoothingFunction()
-        self.cp = opt['confidence_penalty']
         states = {}
 
         # check for cuda
@@ -467,16 +464,16 @@ class Seq2seqAgent(Agent):
             predictions, scores = out[0], out[1]
             log_scores = scores.log()
             entropy = -torch.bmm(scores.view(-1, 1, scores.size(-1)), log_scores.view(-1, scores.size(-1), 1)).view(-1)
-            mask = ys.view(-1) != self.NULL_IDX
-            entropy = torch.matmul(entropy, mask.float()) # exclude null token
+            mask = (ys.view(-1) != self.NULL_IDX).float()
+            mask /= mask.sum()
+            mean_entropy = torch.matmul(entropy, mask) # exclude null token
             loss = self.criterion(log_scores.view(-1, log_scores.size(-1)), ys.view(-1))
-            if (loss - self.cp * entropy).data[0] > 0:
-                loss -= self.cp * entropy
             # save loss to metrics
             target_tokens = ys.ne(self.NULL_IDX).long().sum().data[0]
             self.metrics['loss'] += loss.double().data[0]
             self.metrics['num_tokens'] += target_tokens
             loss /= target_tokens  # average loss per token
+            loss += 1/mean_entropy
             # loss /= xs.size(0)  # average loss per sentence
             loss.backward()
             self.update_params()
