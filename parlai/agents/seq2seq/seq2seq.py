@@ -470,7 +470,8 @@ class Seq2seqAgent(Agent):
             mask = ys.view(-1) != self.NULL_IDX
             entropy = torch.matmul(entropy, mask.float()) # exclude null token
             loss = self.criterion(log_scores.view(-1, log_scores.size(-1)), ys.view(-1))
-            loss -= self.cp * entropy
+            if (loss - self.cp * entropy).data[0] > 0:
+                loss -= self.cp * entropy
             # save loss to metrics
             target_tokens = ys.ne(self.NULL_IDX).long().sum().data[0]
             self.metrics['loss'] += loss.double().data[0]
