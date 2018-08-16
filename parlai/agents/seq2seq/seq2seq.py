@@ -14,6 +14,7 @@ import torch
 from torch.autograd import Variable
 from torch import optim
 import torch.nn as nn
+import torch.nn.functional as F
 
 from collections import deque, Counter
 from nltk.util import ngrams
@@ -388,6 +389,7 @@ class Seq2seqAgent(Agent):
 
     def reset_metrics(self):
         self.metrics['loss'] = 0.0
+        self.metrics['entropy'] = 0.0
         self.metrics['num_tokens'] = 0.0
         self.metrics['1_gram'] = Counter()
         self.metrics['2_gram'] = Counter()
@@ -399,6 +401,7 @@ class Seq2seqAgent(Agent):
         m = {}
         if self.metrics['num_tokens'] > 0:
             m['loss'] = self.metrics['loss'] / self.metrics['num_tokens']
+            m['E'] = self.metrics['entropy'] / self.metrics['num_tokens']
             m['ppl'] = math.exp(m['loss'])
             m['d_1'] = len(self.metrics['1_gram']) / self.metrics['out_tokens']
             m['d_2'] = len(self.metrics['2_gram']) / self.metrics['out_tokens']
@@ -462,17 +465,19 @@ class Seq2seqAgent(Agent):
             self.zero_grad()
             out = self.model(xs, ys)
             predictions, scores = out[0], out[1]
-            log_scores = scores.log()
-            entropy = -torch.bmm(scores.view(-1, 1, scores.size(-1)), log_scores.view(-1, scores.size(-1), 1)).view(-1)
+            log_scores = F.log_softmax(scores, dim=2)
+            p_scores = F.softmax(scores, dim=2)
+            entropy = -torch.bmm(p_scores.view(-1, 1, scores.size(-1)), log_scores.view(-1, scores.size(-1), 1)).view(-1)
             mask = (ys.view(-1) != self.NULL_IDX).float()
-            mask /= mask.sum()
-            mean_entropy = torch.matmul(entropy, mask) # exclude null token
+            entropy = torch.matmul(entropy, mask) # exclude null token
             loss = self.criterion(log_scores.view(-1, log_scores.size(-1)), ys.view(-1))
             # save loss to metrics
-            target_tokens = ys.ne(self.NULL_IDX).long().sum().data[0]
+            target_tokens = mask.sum().data[0]
             self.metrics['loss'] += loss.double().data[0]
+            self.metrics['entropy'] += entropy.double().data[0]
             self.metrics['num_tokens'] += target_tokens
             loss /= target_tokens  # average loss per token
+            mean_entropy = entropy / target_tokens
             loss += 1/mean_entropy
             # loss /= xs.size(0)  # average loss per sentence
             loss.backward()
