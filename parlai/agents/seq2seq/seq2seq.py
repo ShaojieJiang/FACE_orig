@@ -14,6 +14,7 @@ import torch
 from torch.autograd import Variable
 from torch import optim
 import torch.nn as nn
+import torch.nn.functional as F
 
 from collections import deque, Counter
 from nltk.util import ngrams
@@ -464,21 +465,24 @@ class Seq2seqAgent(Agent):
             self.zero_grad()
             out = self.model(xs, ys)
             predictions, scores = out[0], out[1]
-            log_scores = scores.log()
-            entropy = -torch.bmm(scores.view(-1, 1, scores.size(-1)), log_scores.view(-1, scores.size(-1), 1)).view(-1)
+            log_scores = F.log_softmax(scores, dim=2)
+            p_scores = F.softmax(scores, dim=2)
+            entropy = -torch.bmm(p_scores.view(-1, 1, scores.size(-1)), log_scores.view(-1, scores.size(-1), 1)).view(-1)
             mask = (ys.view(-1) != self.NULL_IDX).float()
             entropy = torch.matmul(entropy, mask) # exclude null token
             loss = self.criterion(log_scores.view(-1, log_scores.size(-1)), ys.view(-1))
             # save loss to metrics
             target_tokens = mask.sum().data[0]
             self.metrics['loss'] += loss.double().data[0]
+            self.metrics['entropy'] += entropy.double().data[0]
             self.metrics['num_tokens'] += target_tokens
             self.metrics['entropy'] += entropy.data[0]
             loss /= target_tokens  # average loss per token
-            entropy /= target_tokens
-            weight = 1 + 1 / entropy.data[0]
+            mean_entropy = entropy / target_tokens
+            weight = 1 + 1 / mean_entropy.data[0]
             loss *= weight
             # loss /= xs.size(0)  # average loss per sentence
+            # if (loss - self.cp * entropy).data[0] > 0:
             loss.backward()
             self.update_params()
         else:
